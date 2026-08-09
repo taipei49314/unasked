@@ -1,0 +1,37 @@
+{
+  "commands": [
+    {
+      "command_id": "CMD-PROBE",
+      "argv": ["python", "-c", "print('actual')"],
+      "working_directory": ".",
+      "purpose": "Execute the smallest predeclared probe.",
+      "expected_observation": "A deterministic exit code and captured stdout/stderr."
+    }
+  ],
+  "support_criteria": ["The predeclared mismatch is directly observed."],
+  "falsify_criteria": ["The declared behavior is observed."],
+  "inconclusive_criteria": ["The command is denied, times out, or lacks its environment."],
+  "outcome_assertions": [
+    {
+      "assertion_id": "A-SUPPORT-STDOUT",
+      "command_id": "CMD-PROBE",
+      "field": "EXIT_CODE",
+      "operator": "EQUALS",
+      "expected": 0,
+      "classification": "SUPPORTS"
+    },
+    {
+      "assertion_id": "A-FALSIFY-STDOUT",
+      "command_id": "CMD-PROBE",
+      "field": "EXIT_CODE",
+      "operator": "EQUALS",
+      "expected": 1,
+      "classification": "FALSIFIES"
+    }
+  ],
+  "wall_seconds": 60,
+  "cpu_seconds": 60,
+  "disk_bytes": 100000000,
+  "processes": 8,
+  "mutation_scope": "SANDBOX_ONLY"
+}

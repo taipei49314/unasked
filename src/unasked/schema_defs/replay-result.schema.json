@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.unasked.dev/v0.1/replay-result.schema.json",
+  "title": "UNASKED independent clean replay result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "replay_id",
+    "run_id",
+    "source_run_id",
+    "hypothesis_id",
+    "started_at",
+    "completed_at",
+    "status",
+    "clean_environment",
+    "environment_hash",
+    "core_result_match",
+    "residual_state_detected",
+    "command_result_refs",
+    "evidence_hashes",
+    "reproducer",
+    "independence_attestation"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "replay_id": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" },
+    "run_id": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" },
+    "source_run_id": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" },
+    "hypothesis_id": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" },
+    "started_at": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/timestamp" },
+    "completed_at": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/timestamp" },
+    "status": { "enum": ["PASS", "FAIL", "INCONCLUSIVE"] },
+    "clean_environment": { "const": true },
+    "environment_hash": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" },
+    "core_result_match": { "type": "boolean" },
+    "residual_state_detected": { "const": false },
+    "command_result_refs": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/artifactReference" }
+    },
+    "evidence_hashes": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" },
+      "uniqueItems": true
+    },
+    "reproducer": {
+      "allOf": [
+        { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/actor" },
+        {
+          "properties": {
+            "role": { "const": "INDEPENDENT_REPRODUCER" },
+            "capabilities": { "contains": { "const": "REPLAY" } }
+          }
+        }
+      ]
+    },
+    "independence_attestation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["no_explorer_state", "no_unrecorded_files", "input_manifest_hash"],
+      "properties": {
+        "no_explorer_state": { "const": true },
+        "no_unrecorded_files": { "const": true },
+        "input_manifest_hash": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "status": { "const": "PASS" } },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": { "core_result_match": { "const": true } }
+      }
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+{
+  "conclusion": "PASS",
+  "findings": ["No supplied issue, limitation, or release-note snapshot states the discrepancy."],
+  "evidence_hashes": ["replace-with-cas-sha256"]
+}

@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.unasked.dev/v0.1/experiment-result.schema.json",
+  "title": "UNASKED experiment result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "result_id",
+    "plan_id",
+    "run_id",
+    "started_at",
+    "completed_at",
+    "status",
+    "observed_outcome",
+    "environment_hash",
+    "executions",
+    "evidence_refs",
+    "executor"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "result_id": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" },
+    "plan_id": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" },
+    "run_id": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" },
+    "started_at": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/timestamp" },
+    "completed_at": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/timestamp" },
+    "status": { "enum": ["SUCCEEDED", "FAILED", "INCONCLUSIVE", "DENIED", "TIMED_OUT"] },
+    "observed_outcome": { "enum": ["SUPPORTS", "FALSIFIES", "INCONCLUSIVE"] },
+    "environment_hash": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" },
+    "executions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["command_id", "started_at", "completed_at", "exit_code", "stdout_ref", "stderr_ref", "artifact_refs"],
+        "properties": {
+          "command_id": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" },
+          "started_at": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/timestamp" },
+          "completed_at": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/timestamp" },
+          "exit_code": { "type": "integer" },
+          "stdout_ref": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/artifactReference" },
+          "stderr_ref": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/artifactReference" },
+          "diff_ref": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/artifactReference" },
+          "artifact_refs": {
+            "type": "array",
+            "items": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/artifactReference" }
+          }
+        }
+      }
+    },
+    "evidence_refs": {
+      "type": "array",
+      "items": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/artifactReference" },
+      "uniqueItems": true
+    },
+    "executor": {
+      "allOf": [
+        { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/actor" },
+        {
+          "properties": {
+            "role": { "const": "SANDBOX_EXECUTOR" },
+            "capabilities": { "contains": { "const": "EXECUTE_SANDBOX" } }
+          }
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "status": { "const": "SUCCEEDED" } },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "executions": { "minItems": 1 },
+          "evidence_refs": { "minItems": 1 }
+        }
+      }
+    }
+  ]
+}

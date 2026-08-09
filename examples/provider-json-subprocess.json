@@ -1,0 +1,7 @@
+{
+  "kind": "json-subprocess",
+  "model": "one-local-model",
+  "argv": ["C:/absolute/path/to/provider-bridge.exe"],
+  "bound_files": ["C:/absolute/path/to/model-or-adapter.manifest.json"],
+  "timeout_seconds": 60
+}

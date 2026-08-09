@@ -1,0 +1,226 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.unasked.dev/v0.1/baseline-result.schema.json",
+  "title": "UNASKED deterministic baseline result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_type",
+    "baseline_run_id",
+    "run_id",
+    "snapshot_hash",
+    "snapshot_commit",
+    "protocol_hash",
+    "protocol_version",
+    "detector",
+    "observation_manifest_hash",
+    "claim_scope",
+    "lifecycle_effect",
+    "signal_count",
+    "signals",
+    "normalized_budget",
+    "integration"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "record_type": { "const": "DETERMINISTIC_BASELINE_RESULT" },
+    "baseline_run_id": {
+      "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier"
+    },
+    "run_id": {
+      "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier"
+    },
+    "snapshot_hash": {
+      "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256"
+    },
+    "snapshot_commit": { "$ref": "#/$defs/gitObject" },
+    "protocol_hash": {
+      "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256"
+    },
+    "protocol_version": { "type": "string", "minLength": 1 },
+    "detector": { "$ref": "#/$defs/detectorMetadata" },
+    "observation_manifest_hash": {
+      "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256"
+    },
+    "claim_scope": { "const": "NON_DISCOVERY_SIGNAL_ONLY" },
+    "lifecycle_effect": { "const": "NONE" },
+    "signal_count": { "type": "integer", "minimum": 0 },
+    "signals": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/signal" },
+      "uniqueItems": true
+    },
+    "normalized_budget": { "$ref": "#/$defs/normalizedBudget" },
+    "integration": { "$ref": "#/$defs/integration" }
+  },
+  "$defs": {
+    "gitObject": {
+      "type": "string",
+      "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    },
+    "detectorIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "const": "deterministic-control-signal-baseline" },
+        "version": { "const": "0.1.0" }
+      }
+    },
+    "detectorMetadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "rules", "benchmark_specific_rules"],
+      "properties": {
+        "name": { "const": "deterministic-control-signal-baseline" },
+        "version": { "const": "0.1.0" },
+        "rules": { "const": ["continue_on_error", "skip", "suppression"] },
+        "benchmark_specific_rules": { "const": false }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "line_start", "line_end", "git_object"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": {
+          "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256"
+        },
+        "line_start": { "type": "integer", "minimum": 1 },
+        "line_end": { "type": "integer", "minimum": 1 },
+        "git_object": { "$ref": "#/$defs/gitObject" }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "matched_text": { "type": "string" },
+        "line_text": { "type": "string" },
+        "key": { "type": "string" },
+        "value": { "type": "string" },
+        "yaml_path": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "signal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "signal_id",
+        "record_type",
+        "run_id",
+        "snapshot_hash",
+        "snapshot_commit",
+        "protocol_hash",
+        "detector",
+        "rule_id",
+        "category",
+        "source_observation_id",
+        "source",
+        "evidence",
+        "claim_scope",
+        "lifecycle_effect",
+        "record_hash"
+      ],
+      "properties": {
+        "schema_version": { "const": "0.1.0" },
+        "signal_id": {
+          "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier"
+        },
+        "record_type": { "const": "DETERMINISTIC_SIGNAL" },
+        "run_id": {
+          "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier"
+        },
+        "snapshot_hash": {
+          "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256"
+        },
+        "snapshot_commit": { "$ref": "#/$defs/gitObject" },
+        "protocol_hash": {
+          "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256"
+        },
+        "detector": { "$ref": "#/$defs/detectorIdentity" },
+        "rule_id": {
+          "type": "string",
+          "pattern": "^control-signal/(?:continue_on_error|skip|suppression)$"
+        },
+        "category": { "enum": ["continue_on_error", "skip", "suppression"] },
+        "source_observation_id": {
+          "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier"
+        },
+        "source": { "$ref": "#/$defs/source" },
+        "evidence": { "$ref": "#/$defs/evidence" },
+        "claim_scope": { "const": "NON_DISCOVERY_SIGNAL_ONLY" },
+        "lifecycle_effect": { "const": "NONE" },
+        "record_hash": {
+          "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256"
+        }
+      }
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "snapshot_passes",
+        "snapshot_entries",
+        "snapshot_bytes",
+        "snapshot_kib_units",
+        "observations_classified",
+        "model_calls",
+        "network_requests",
+        "experiment_commands"
+      ],
+      "properties": {
+        "snapshot_passes": { "const": 1 },
+        "snapshot_entries": { "type": "integer", "minimum": 0 },
+        "snapshot_bytes": { "type": "integer", "minimum": 0 },
+        "snapshot_kib_units": { "type": "integer", "minimum": 0 },
+        "observations_classified": { "type": "integer", "minimum": 0 },
+        "model_calls": { "const": 0 },
+        "network_requests": { "const": 0 },
+        "experiment_commands": { "const": 0 }
+      }
+    },
+    "normalizedBudget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "policy_id",
+        "unit",
+        "formula",
+        "usage",
+        "consumed_units",
+        "workload_bound_units",
+        "within_workload_bound"
+      ],
+      "properties": {
+        "policy_id": { "const": "UNASKED-NORMALIZED-STATIC-SCAN-v1" },
+        "unit": { "const": "normalized_investigation_unit" },
+        "formula": {
+          "const": "snapshot_entries + ceil(snapshot_bytes / 1024) + observations_classified"
+        },
+        "usage": { "$ref": "#/$defs/usage" },
+        "consumed_units": { "type": "integer", "minimum": 0 },
+        "workload_bound_units": { "type": "integer", "minimum": 0 },
+        "within_workload_bound": { "const": true }
+      }
+    },
+    "integration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["canonical_encoding", "media_type", "ledger_event_type"],
+      "properties": {
+        "canonical_encoding": { "const": "unasked.canonical_json" },
+        "media_type": {
+          "const": "application/vnd.unasked.deterministic-baseline+json"
+        },
+        "ledger_event_type": { "const": "DETERMINISTIC_BASELINE_COMPLETED" }
+      }
+    }
+  }
+}

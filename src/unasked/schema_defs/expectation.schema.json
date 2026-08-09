@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.unasked.dev/v0.1/expectation.schema.json",
+  "title": "UNASKED sourced expectation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "expectation_id",
+    "run_id",
+    "created_at",
+    "expectation_type",
+    "statement",
+    "sources",
+    "reasoning_chain",
+    "strength",
+    "snapshot_hash"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "expectation_id": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" },
+    "run_id": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" },
+    "created_at": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/timestamp" },
+    "expectation_type": { "enum": ["EXPLICIT", "STRUCTURAL", "HISTORICAL"] },
+    "statement": { "type": "string", "minLength": 1 },
+    "sources": {
+      "type": "array",
+      "items": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sourceReference" },
+      "uniqueItems": true
+    },
+    "reasoning_chain": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "strength": { "enum": ["WEAK", "STRONG"] },
+    "snapshot_hash": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "strength": { "const": "STRONG" } },
+        "required": ["strength"]
+      },
+      "then": {
+        "properties": { "sources": { "minItems": 1 } }
+      }
+    },
+    {
+      "if": {
+        "properties": { "expectation_type": { "const": "EXPLICIT" } },
+        "required": ["expectation_type"]
+      },
+      "then": {
+        "properties": { "sources": { "minItems": 1 } }
+      }
+    }
+  ]
+}

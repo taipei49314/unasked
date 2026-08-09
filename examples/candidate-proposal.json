@@ -1,0 +1,22 @@
+{
+  "expectation_ids": ["E-000001"],
+  "observation_ids": ["O-replace-with-observation-id"],
+  "discrepancy": "A sourced expectation and observation disagree.",
+  "materiality_question": "Would this change release, test, security, support, or maintenance decisions?",
+  "origin": "MODEL_EXPLORER",
+  "main_hypothesis": "The observed behavior contradicts the declared behavior.",
+  "benign_alternatives": [
+    "The declaration may describe a different supported invocation."
+  ],
+  "falsification_conditions": [
+    "The exact declared invocation produces the declared result."
+  ],
+  "minimal_experiment": "Run the smallest declared invocation in a fresh worktree.",
+  "supporting_outcomes": ["The mismatch reproduces."],
+  "falsifying_outcomes": ["The declared result occurs."],
+  "inconclusive_outcomes": ["A required environment capability is unavailable."],
+  "estimated_seconds": 30,
+  "risk_level": "LOW",
+  "risks": ["Sandbox-only process execution"],
+  "human_direction_provided": false
+}

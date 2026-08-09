@@ -1,0 +1,198 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.unasked.dev/v0.1/common.schema.json",
+  "title": "UNASKED common schema definitions",
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "lifecycleState": {
+      "type": "string",
+      "enum": [
+        "SIGNAL",
+        "CANDIDATE",
+        "HYPOTHESIZED",
+        "TESTABLE",
+        "SUPPORTED",
+        "REPRODUCED",
+        "VERIFIED",
+        "FALSIFIED",
+        "DUPLICATE",
+        "INCONCLUSIVE",
+        "NON_MATERIAL",
+        "ENVIRONMENTAL",
+        "STALE",
+        "REVOKED"
+      ]
+    },
+    "terminalState": {
+      "type": "string",
+      "enum": [
+        "VERIFIED",
+        "FALSIFIED",
+        "DUPLICATE",
+        "INCONCLUSIVE",
+        "NON_MATERIAL",
+        "ENVIRONMENTAL",
+        "STALE",
+        "REVOKED"
+      ]
+    },
+    "capability": {
+      "type": "string",
+      "enum": [
+        "OBSERVE",
+        "PROPOSE_CANDIDATE",
+        "REQUEST_EXPERIMENT",
+        "EXECUTE_SANDBOX",
+        "SUBMIT_EVIDENCE",
+        "CHALLENGE",
+        "REPLAY",
+        "AUTHORIZE_VERDICT",
+        "PUBLISH"
+      ]
+    },
+    "role": {
+      "type": "string",
+      "enum": [
+        "PRINCIPAL_INVESTIGATOR",
+        "EXPLORER",
+        "EXPERIMENT_PLANNER",
+        "SANDBOX_EXECUTOR",
+        "FALSIFIER",
+        "INDEPENDENT_REPRODUCER",
+        "DISCOVERY_AUTHORITY_KERNEL",
+        "HUMAN_JUDGE",
+        "SYSTEM"
+      ]
+    },
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["actor_id", "role", "capabilities"],
+      "properties": {
+        "actor_id": { "$ref": "#/$defs/identifier" },
+        "role": { "$ref": "#/$defs/role" },
+        "capabilities": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/capability" },
+          "uniqueItems": true
+        }
+      }
+    },
+    "authorityActor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["actor_id", "role", "capabilities"],
+      "properties": {
+        "actor_id": { "$ref": "#/$defs/identifier" },
+        "role": {
+          "enum": ["DISCOVERY_AUTHORITY_KERNEL", "HUMAN_JUDGE"]
+        },
+        "capabilities": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/capability" },
+          "contains": { "const": "AUTHORIZE_VERDICT" },
+          "uniqueItems": true
+        }
+      }
+    },
+    "artifactReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact_id", "sha256"],
+      "properties": {
+        "artifact_id": { "$ref": "#/$defs/identifier" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "uri": { "type": "string", "minLength": 1 },
+        "media_type": { "type": "string", "minLength": 1 },
+        "size_bytes": { "type": "integer", "minimum": 0 },
+        "schema_name": { "type": "string", "minLength": 1 }
+      }
+    },
+    "sourceReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_type", "sha256", "snapshot_hash"],
+      "properties": {
+        "source_type": {
+          "enum": [
+            "SOURCE",
+            "CONFIG",
+            "DOCUMENTATION",
+            "SPECIFICATION",
+            "THREAT_MODEL",
+            "GIT_HISTORY",
+            "CI_METADATA",
+            "TEST",
+            "COVERAGE",
+            "BUILD_METADATA",
+            "RELEASE_METADATA",
+            "ISSUE_SNAPSHOT",
+            "KNOWN_LIMITATION",
+            "RUNTIME",
+            "COMMAND_OUTPUT",
+            "ARTIFACT"
+          ]
+        },
+        "path": { "type": "string", "minLength": 1 },
+        "uri": { "type": "string", "minLength": 1 },
+        "locator": { "type": "string", "minLength": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "snapshot_hash": { "$ref": "#/$defs/sha256" }
+      },
+      "anyOf": [
+        { "required": ["path"] },
+        { "required": ["uri"] }
+      ]
+    },
+    "toolVersion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 }
+      }
+    },
+    "snapshotBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository_commit",
+        "target_snapshot_hash",
+        "protocol_hash",
+        "policy_hash",
+        "tool_versions"
+      ],
+      "properties": {
+        "repository_commit": {
+          "type": "string",
+          "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+        },
+        "target_snapshot_hash": { "$ref": "#/$defs/sha256" },
+        "protocol_hash": { "$ref": "#/$defs/sha256" },
+        "policy_hash": { "$ref": "#/$defs/sha256" },
+        "knowledge_boundary_hash": { "$ref": "#/$defs/sha256" },
+        "context_manifest_hash": { "$ref": "#/$defs/sha256" },
+        "tool_versions": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/toolVersion" }
+        }
+      }
+    }
+  }
+}

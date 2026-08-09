@@ -1,0 +1,48 @@
+{
+  "conclusion": "PASS",
+  "findings": ["The main hypothesis survived all predeclared challenges."],
+  "evidence_hashes": [
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+  ],
+  "tested_alternatives": ["A benign configuration difference explains the observation."],
+  "negative_control": "The matched control did not exhibit the discrepancy.",
+  "semantic_variant": "A semantics-preserving renamed variant retained the result.",
+  "completeness_check": "Relevant entrypoints and suppression paths were checked.",
+  "challenge_attempts": [
+    {
+      "attempt_id": "CH-BENIGN",
+      "attempt_type": "BENIGN_ALTERNATIVE",
+      "description": "Execute the benign-configuration explanation.",
+      "predeclared_input_hash": "1111111111111111111111111111111111111111111111111111111111111111",
+      "result_ref": {"artifact_id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "uri": "cas://sha256/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+      "observed_outcome": "SURVIVED"
+    },
+    {
+      "attempt_id": "CH-CONTROL",
+      "attempt_type": "NEGATIVE_CONTROL",
+      "description": "Execute the matched negative control.",
+      "predeclared_input_hash": "2222222222222222222222222222222222222222222222222222222222222222",
+      "result_ref": {"artifact_id": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "uri": "cas://sha256/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+      "observed_outcome": "SURVIVED"
+    },
+    {
+      "attempt_id": "CH-VARIANT",
+      "attempt_type": "SEMANTIC_VARIANT",
+      "description": "Execute the semantics-preserving variant.",
+      "predeclared_input_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+      "result_ref": {"artifact_id": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "uri": "cas://sha256/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},
+      "observed_outcome": "SURVIVED"
+    },
+    {
+      "attempt_id": "CH-COMPLETE",
+      "attempt_type": "COMPLETENESS_CHECK",
+      "description": "Execute the completeness check.",
+      "predeclared_input_hash": "4444444444444444444444444444444444444444444444444444444444444444",
+      "result_ref": {"artifact_id": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "uri": "cas://sha256/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},
+      "observed_outcome": "SURVIVED"
+    }
+  ]
+}

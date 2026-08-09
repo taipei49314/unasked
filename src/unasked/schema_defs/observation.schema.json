@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.unasked.dev/v0.1/observation.schema.json",
+  "title": "UNASKED factual observation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "observation_id",
+    "run_id",
+    "observed_at",
+    "kind",
+    "statement",
+    "source",
+    "acquisition",
+    "integrity",
+    "snapshot_hash"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "observation_id": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" },
+    "run_id": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" },
+    "observed_at": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/timestamp" },
+    "kind": {
+      "enum": [
+        "CLAIM",
+        "STRUCTURE",
+        "WORKFLOW",
+        "TEST_PATH",
+        "BUILD_ARTIFACT",
+        "HISTORICAL_BASELINE",
+        "RUNTIME_BEHAVIOR",
+        "SUPPRESSION",
+        "VERSION",
+        "CONTENT_HASH"
+      ]
+    },
+    "statement": { "type": "string", "minLength": 1 },
+    "source": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sourceReference" },
+    "acquisition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "actor_id", "tool"],
+      "properties": {
+        "method": { "enum": ["READ", "PARSE", "COMMAND", "HASH", "QUERY"] },
+        "actor_id": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" },
+        "tool": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/toolVersion" },
+        "command_id": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" }
+      }
+    },
+    "integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "content_hash"],
+      "properties": {
+        "status": { "enum": ["COMPLETE", "PARTIAL", "FAILED"] },
+        "content_hash": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" },
+        "notes": { "type": "string" }
+      }
+    },
+    "snapshot_hash": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" }
+  }
+}

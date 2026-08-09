@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.unasked.dev/v0.1/hypothesis.schema.json",
+  "title": "UNASKED falsifiable hypothesis",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "hypothesis_id",
+    "candidate_id",
+    "run_id",
+    "created_at",
+    "state",
+    "main_hypothesis",
+    "benign_alternatives",
+    "falsification_conditions",
+    "minimal_experiment",
+    "expected_observations",
+    "cost_and_risk",
+    "required_capabilities",
+    "proposed_by",
+    "snapshot_hash"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "hypothesis_id": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" },
+    "candidate_id": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" },
+    "run_id": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" },
+    "created_at": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/timestamp" },
+    "state": { "enum": ["HYPOTHESIZED", "TESTABLE"] },
+    "main_hypothesis": { "type": "string", "minLength": 1 },
+    "benign_alternatives": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "falsification_conditions": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "minimal_experiment": { "type": "string", "minLength": 1 },
+    "expected_observations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["supporting", "falsifying", "inconclusive"],
+      "properties": {
+        "supporting": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+        "falsifying": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+        "inconclusive": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "cost_and_risk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["estimated_seconds", "risk_level", "risks"],
+      "properties": {
+        "estimated_seconds": { "type": "integer", "minimum": 0 },
+        "risk_level": { "enum": ["LOW", "MEDIUM", "HIGH"] },
+        "risks": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "required_capabilities": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/capability" },
+      "uniqueItems": true
+    },
+    "proposed_by": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/actor" },
+    "snapshot_hash": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" }
+  }
+}

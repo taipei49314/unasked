@@ -1,0 +1,232 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.unasked.dev/v0.1/explorer-action.schema.json",
+  "title": "UNASKED bounded Explorer action",
+  "oneOf": [
+    { "$ref": "#/$defs/listFiles" },
+    { "$ref": "#/$defs/readFile" },
+    { "$ref": "#/$defs/search" },
+    { "$ref": "#/$defs/hashText" },
+    { "$ref": "#/$defs/propose" },
+    { "$ref": "#/$defs/stop" }
+  ],
+  "$defs": {
+    "identifierArray": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier"
+      },
+      "uniqueItems": true
+    },
+    "textArray": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "listFiles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action"],
+      "properties": {
+        "action": { "type": "string", "pattern": "^[Ll][Ii][Ss][Tt]_[Ff][Ii][Ll][Ee][Ss]$" },
+        "path_prefix": { "type": "string" },
+        "limit": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "readFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action", "path"],
+      "properties": {
+        "action": { "type": "string", "pattern": "^[Rr][Ee][Aa][Dd]_[Ff][Ii][Ll][Ee]$" },
+        "path": { "type": "string", "minLength": 1 },
+        "max_bytes": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "search": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action", "query"],
+      "properties": {
+        "action": { "type": "string", "pattern": "^[Ss][Ee][Aa][Rr][Cc][Hh]$" },
+        "query": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "path_prefix": { "type": "string" },
+        "limit": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "hashText": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action", "text"],
+      "properties": {
+        "action": { "type": "string", "pattern": "^[Hh][Aa][Ss][Hh]_[Tt][Ee][Xx][Tt]$" },
+        "text": { "type": "string" }
+      }
+    },
+    "expectation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "expectation_type",
+        "statement",
+        "reasoning_chain",
+        "source_observation_ids",
+        "strength"
+      ],
+      "properties": {
+        "expectation_type": {
+          "type": "string",
+          "pattern": "^(?:[Ee][Xx][Pp][Ll][Ii][Cc][Ii][Tt]|[Ss][Tt][Rr][Uu][Cc][Tt][Uu][Rr][Aa][Ll]|[Hh][Ii][Ss][Tt][Oo][Rr][Ii][Cc][Aa][Ll])$"
+        },
+        "statement": { "type": "string", "minLength": 1 },
+        "reasoning_chain": { "$ref": "#/$defs/textArray" },
+        "source_observation_ids": { "$ref": "#/$defs/identifierArray" },
+        "strength": { "type": "string", "pattern": "^(?:[Ww][Ee][Aa][Kk]|[Ss][Tt][Rr][Oo][Nn][Gg])$" }
+      }
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "observation_ids",
+        "discrepancy",
+        "materiality_question",
+        "main_hypothesis",
+        "benign_alternatives",
+        "falsification_conditions",
+        "minimal_experiment",
+        "supporting_outcomes",
+        "falsifying_outcomes",
+        "inconclusive_outcomes",
+        "estimated_seconds",
+        "risk_level",
+        "risks"
+      ],
+      "properties": {
+        "observation_ids": { "$ref": "#/$defs/identifierArray" },
+        "discrepancy": { "type": "string", "minLength": 1 },
+        "materiality_question": { "type": "string", "minLength": 1 },
+        "main_hypothesis": { "type": "string", "minLength": 1 },
+        "benign_alternatives": { "$ref": "#/$defs/textArray" },
+        "falsification_conditions": { "$ref": "#/$defs/textArray" },
+        "minimal_experiment": { "type": "string", "minLength": 1 },
+        "supporting_outcomes": { "$ref": "#/$defs/textArray" },
+        "falsifying_outcomes": { "$ref": "#/$defs/textArray" },
+        "inconclusive_outcomes": { "$ref": "#/$defs/textArray" },
+        "estimated_seconds": { "type": "integer", "minimum": 0 },
+        "risk_level": {
+          "type": "string",
+          "pattern": "^(?:[Ll][Oo][Ww]|[Mm][Ee][Dd][Ii][Uu][Mm]|[Hh][Ii][Gg][Hh])$"
+        },
+        "risks": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "command": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command_id", "argv", "purpose", "expected_observation"],
+      "properties": {
+        "command_id": {
+          "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier"
+        },
+        "argv": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string" }
+        },
+        "working_directory": { "type": "string", "minLength": 1 },
+        "purpose": { "type": "string", "minLength": 1 },
+        "expected_observation": { "type": "string", "minLength": 1 }
+      }
+    },
+    "outcomeAssertion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["assertion_id", "command_id", "field", "operator", "expected", "classification"],
+      "properties": {
+        "assertion_id": {
+          "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier"
+        },
+        "command_id": {
+          "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier"
+        },
+        "field": { "enum": ["EXIT_CODE", "STDOUT_SHA256", "STDERR_SHA256", "DIFF_SHA256"] },
+        "operator": { "const": "EQUALS" },
+        "expected": {
+          "oneOf": [
+            { "type": "integer" },
+            { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" }
+          ]
+        },
+        "classification": { "enum": ["SUPPORTS", "FALSIFIES"] }
+      }
+    },
+    "plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "commands",
+        "support_criteria",
+        "falsify_criteria",
+        "inconclusive_criteria",
+        "outcome_assertions",
+        "wall_seconds",
+        "cpu_seconds",
+        "disk_bytes",
+        "processes"
+      ],
+      "properties": {
+        "commands": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/command" }
+        },
+        "support_criteria": { "$ref": "#/$defs/textArray" },
+        "falsify_criteria": { "$ref": "#/$defs/textArray" },
+        "inconclusive_criteria": { "$ref": "#/$defs/textArray" },
+        "outcome_assertions": {
+          "type": "array",
+          "minItems": 2,
+          "items": { "$ref": "#/$defs/outcomeAssertion" }
+        },
+        "wall_seconds": { "type": "integer", "minimum": 1 },
+        "cpu_seconds": { "type": "integer", "minimum": 1 },
+        "disk_bytes": { "type": "integer", "minimum": 1 },
+        "processes": { "type": "integer", "minimum": 1 },
+        "mutation_scope": {
+          "type": "string",
+          "pattern": "^(?:[Rr][Ee][Aa][Dd]_[Oo][Nn][Ll][Yy]|[Ss][Aa][Nn][Dd][Bb][Oo][Xx]_[Oo][Nn][Ll][Yy])$"
+        }
+      }
+    },
+    "propose": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action", "expectation", "candidate"],
+      "properties": {
+        "action": { "type": "string", "pattern": "^[Pp][Rr][Oo][Pp][Oo][Ss][Ee]$" },
+        "expectation": { "$ref": "#/$defs/expectation" },
+        "candidate": { "$ref": "#/$defs/candidate" },
+        "plan": {
+          "oneOf": [
+            { "$ref": "#/$defs/plan" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "stop": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action"],
+      "properties": {
+        "action": { "type": "string", "pattern": "^[Ss][Tt][Oo][Pp]$" },
+        "reason": { "type": "string" }
+      }
+    }
+  }
+}

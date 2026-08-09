@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.unasked.dev/v0.1/knowledge-scan.schema.json",
+  "title": "UNASKED frozen knowledge-boundary scan result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "scan_id",
+    "run_id",
+    "completed_at",
+    "status",
+    "knowledge_boundary_hash",
+    "target_snapshot_hash",
+    "categories",
+    "source_manifest",
+    "raw_observations_ref",
+    "evidence_hashes",
+    "scope_attestation",
+    "scanner"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "scan_id": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" },
+    "run_id": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" },
+    "completed_at": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/timestamp" },
+    "status": { "const": "COMPLETE" },
+    "knowledge_boundary_hash": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" },
+    "target_snapshot_hash": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" },
+    "categories": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "source_manifest": {
+      "type": "array",
+      "items": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sourceReference" },
+      "uniqueItems": true
+    },
+    "raw_observations_ref": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/artifactReference" },
+    "evidence_hashes": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" },
+      "uniqueItems": true
+    },
+    "scope_attestation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository_snapshot_fully_scanned", "supplied_external_sources_fully_scanned", "omitted_sources"],
+      "properties": {
+        "repository_snapshot_fully_scanned": { "const": true },
+        "supplied_external_sources_fully_scanned": { "const": true },
+        "omitted_sources": { "type": "array", "maxItems": 0 }
+      }
+    },
+    "scanner": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/actor" }
+  }
+}

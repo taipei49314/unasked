@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.unasked.dev/v0.1/evidence-reference.schema.json",
+  "title": "UNASKED immutable evidence reference",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "evidence_id",
+    "run_id",
+    "kind",
+    "sha256",
+    "uri",
+    "size_bytes",
+    "media_type",
+    "created_at",
+    "producer",
+    "provenance"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "evidence_id": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" },
+    "run_id": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" },
+    "kind": {
+      "enum": [
+        "COMMAND",
+        "STDOUT",
+        "STDERR",
+        "EXIT_CODE",
+        "DIFF",
+        "ARTIFACT",
+        "FILE",
+        "HASH_MANIFEST",
+        "RUNTIME_FACT",
+        "REPLAY_LOG",
+        "OTHER"
+      ]
+    },
+    "sha256": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" },
+    "uri": { "type": "string", "minLength": 1 },
+    "size_bytes": { "type": "integer", "minimum": 0 },
+    "media_type": { "type": "string", "minLength": 1 },
+    "created_at": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/timestamp" },
+    "producer": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/actor" },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["immutable", "target_snapshot_hash"],
+      "properties": {
+        "immutable": { "const": true },
+        "target_snapshot_hash": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" },
+        "command_id": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" },
+        "source_path": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}
