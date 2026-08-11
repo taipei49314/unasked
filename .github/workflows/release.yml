@@ -17,6 +17,10 @@ permissions:
 env:
   RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
   verify:
     name: Verify and build the exact annotated tag
@@ -134,13 +138,13 @@ jobs:
           EXPECTED_TAG_OBJECT: ${{ needs.verify.outputs.tag_object }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          require_tag_on_main() {
+          require_release_binding() {
             main_status="$(gh api "repos/$GITHUB_REPOSITORY/compare/$EXPECTED_TAG_COMMIT...main" --jq .status)"
             test "$main_status" = identical || test "$main_status" = ahead
+            remote_tag_object="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq .object.sha)"
+            test "$remote_tag_object" = "$EXPECTED_TAG_OBJECT"
           }
-          require_tag_on_main
-          remote_tag_object="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq .object.sha)"
-          test "$remote_tag_object" = "$EXPECTED_TAG_OBJECT"
+          require_release_binding
           created_draft=0
           cleanup_draft() {
             if test "$created_draft" = 1; then
@@ -148,15 +152,21 @@ jobs:
             fi
           }
           trap cleanup_draft ERR
+          if existing_release_state="$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft 2>/dev/null)"; then
+            test "$existing_release_state" = true
+            gh release delete "$RELEASE_TAG" --yes
+          fi
+          require_release_binding
           gh release create "$RELEASE_TAG" \
-            dist/one/*.whl \
-            dist/one/*.tar.gz \
-            dist/one/SHA256SUMS.txt \
             --verify-tag \
             --draft \
             --title "UNASKED $RELEASE_TAG - Non-certifying M0 development path" \
             --notes-file ".github/releases/${RELEASE_TAG#v}.md"
           created_draft=1
+          gh release upload "$RELEASE_TAG" \
+            dist/one/*.whl \
+            dist/one/*.tar.gz \
+            dist/one/SHA256SUMS.txt
           test "$(gh release view "$RELEASE_TAG" --json assets --jq '.assets | length')" = 3
           for file in dist/one/*.whl dist/one/*.tar.gz dist/one/SHA256SUMS.txt; do
             name="$(basename "$file")"
@@ -164,9 +174,7 @@ jobs:
             remote_size="$(gh release view "$RELEASE_TAG" --json assets --jq ".assets[] | select(.name == \"$name\") | .size")"
             test "$remote_size" = "$local_size"
           done
-          remote_tag_object="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq .object.sha)"
-          test "$remote_tag_object" = "$EXPECTED_TAG_OBJECT"
-          require_tag_on_main
+          require_release_binding
           gh release edit "$RELEASE_TAG" --draft=false --latest
           created_draft=0
           trap - ERR

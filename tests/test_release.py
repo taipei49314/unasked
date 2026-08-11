@@ -66,7 +66,11 @@ def test_release_workflow_binds_the_remote_tag_object_and_supports_recovery() ->
     assert 'test "$(jq -r \'.object.type\' <<<"$tag_ref")" = tag' in workflow
     assert 'test "$(jq -r \'.tag\' <<<"$tag_record")" = "$RELEASE_TAG"' in workflow
     assert "compare/$EXPECTED_TAG_COMMIT...main" in workflow
-    assert workflow.count("require_tag_on_main") == 3
+    assert "group: release-${{ inputs.tag || github.ref_name }}" in workflow
+    assert "cancel-in-progress: false" in workflow
+    assert "existing_release_state=" in workflow
+    assert 'gh release upload "$RELEASE_TAG"' in workflow
+    assert workflow.count("require_release_binding") == 4
     assert "GITHUB_REF_NAME" not in workflow
 
 
