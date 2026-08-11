@@ -56,6 +56,17 @@ def test_release_source_bindings_are_consistent() -> None:
     assert report["source_file_count"] > 100
 
 
+def test_release_workflow_binds_the_remote_tag_object_and_supports_recovery() -> None:
+    workflow = (_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+
+    assert "workflow_dispatch:" in workflow
+    assert "RELEASE_TAG: ${{ inputs.tag || github.ref_name }}" in workflow
+    assert "ref: ${{ inputs.tag || github.ref }}" in workflow
+    assert "git/ref/tags/$RELEASE_TAG" in workflow
+    assert 'test "$(jq -r \'.object.type\' <<<"$tag_ref")" = tag' in workflow
+    assert "GITHUB_REF_NAME" not in workflow
+
+
 def test_release_rejects_a_version_mismatched_tag() -> None:
     root = Path(__file__).resolve().parents[1]
 
