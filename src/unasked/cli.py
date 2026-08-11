@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import subprocess
+import subprocess  # nosec B404
 import sys
 from pathlib import Path
 from typing import Any
@@ -95,7 +95,8 @@ def _doctor(args: argparse.Namespace) -> dict[str, Any]:
     git_path = str(resolved_git) if resolved_git is not None else None
     git_version = None
     if git_path:
-        completed = subprocess.run(
+        # The argument vector is fixed and shell execution is disabled.
+        completed = subprocess.run(  # nosec B603
             [git_path, "--no-lazy-fetch", "--version"],
             check=False,
             capture_output=True,

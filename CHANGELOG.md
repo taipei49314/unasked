@@ -3,6 +3,26 @@
 All notable software changes are recorded here. Milestone claims remain governed by
 `constitution/CLAIMS_POLICY.md` and require independent evidence beyond a software release.
 
+## 0.2.1 — 2026-08-11
+
+### Added
+
+- Public security, support, conduct, contribution, issue, and pull-request policies with an
+  explicit source-visible, reserved-rights license boundary.
+- CodeQL, Dependabot, Bandit, and locked runtime dependency auditing in CI.
+
+### Security
+
+- Replace runtime assertions at artifact, repository, and capture integrity boundaries with
+  explicit fail-closed errors that remain active under optimized Python execution.
+- Pin current Node 24 GitHub Actions by immutable commit and keep workflow credentials out of
+  checked-out Git configuration.
+
+### Claim boundary
+
+This release remains `NON_CERTIFYING` with `m0_demonstrated=false`. Public repository
+visibility does not demonstrate M0 and does not make model output evidence.
+
 ## 0.2.0 — 2026-08-11
 
 ### Added

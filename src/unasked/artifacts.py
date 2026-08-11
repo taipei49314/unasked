@@ -460,7 +460,11 @@ class ArtifactStore:
 
     def get_metadata(self, digest: str | ArtifactMetadata) -> ArtifactMetadata:
         report = self.verify_or_raise(digest)
-        assert report.metadata is not None
+        if report.metadata is None:
+            raise IntegrityError(
+                "Verified artifact metadata is missing.",
+                details=report.to_dict(),
+            )
         return report.metadata
 
     metadata = get_metadata

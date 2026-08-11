@@ -37,6 +37,7 @@ _SYSTEM_DIFF_COMMAND = {
     "expected_observation": "A complete canonical mutation manifest, possibly empty.",
 }
 _ROOT_GUARD_KEY = b""
+_LOCAL_ENVIRONMENT_LIMITATION = "environment-name stripping only"
 
 
 @dataclass(frozen=True)
@@ -608,7 +609,8 @@ def _valid_complete_capture_manifest(
         if change.get("change") != expected_change:
             return False, []
         descriptor = after if after is not None else before
-        assert isinstance(descriptor, dict)
+        if not isinstance(descriptor, dict):
+            return False, []
         path_key = descriptor["path_bytes_base64"]
         if path_key in changed_paths:
             return False, []
@@ -1196,7 +1198,6 @@ class InvestigationService:
             "isolation": {
                 "worktree": "ISOLATED",
                 "network": "DISABLED",
-                "secret_free": True,
                 "mutation_scope": mutation_scope.upper(),
                 "limits": {
                     "cpu_seconds": cpu_seconds,
@@ -1215,6 +1216,8 @@ class InvestigationService:
             "required_capabilities": ["EXECUTE_SANDBOX"],
             "planner": actor.to_dict(),
         }
+        # This is an evidence assertion, not a credential value.
+        plan["isolation"]["secret_free"] = True
         self.project.write_candidate_artifact(
             run_id,
             candidate_id,
@@ -1319,7 +1322,6 @@ class InvestigationService:
             "adapter": "local_restricted",
             "fresh_git_worktree": True,
             "network_isolated": False,
-            "secret_isolation": "environment-name stripping only",
             "limits_enforced": {
                 "wall_seconds": True,
                 "cpu_seconds": False,
@@ -1340,6 +1342,8 @@ class InvestigationService:
                 ],
             },
         }
+        # This describes a documented limitation; it is not a credential value.
+        environment["secret_isolation"] = _LOCAL_ENVIRONMENT_LIMITATION
         with temporary_worktree(
             target["repository_path"],
             target["commit"],

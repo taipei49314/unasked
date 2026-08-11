@@ -296,6 +296,19 @@ def test_git_subprocess_disables_lazy_fetch_and_interaction(
     assert captured_environment["GCM_INTERACTIVE"] == "Never"
 
 
+def test_copy_metadata_tree_fails_closed_when_required_read_returns_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    (source / "main").write_bytes(b"fixture")
+    monkeypatch.setattr(repository_module, "_read_regular_metadata", lambda *args, **kwargs: None)
+
+    with pytest.raises(IntegrityError, match="reference metadata is missing"):
+        repository_module._copy_metadata_tree(source, destination)
+
+
 def test_partial_clone_missing_blob_fails_without_contacting_remote(tmp_path: Path) -> None:
     source = tmp_path / "source"
     source.mkdir()
