@@ -283,7 +283,7 @@ def test_git_subprocess_disables_lazy_fetch_and_interaction(
     monkeypatch.setattr(
         repository_module,
         "find_executable",
-        lambda *args, **kwargs: Path(sys.executable),
+        lambda *args, **kwargs: Path(sys.executable).resolve(strict=True),
     )
     monkeypatch.setattr(repository_module.subprocess, "run", fake_run)
 
