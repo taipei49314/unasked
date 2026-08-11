@@ -56,21 +56,21 @@ jobs:
       - name: Build twice from the frozen tag
         run: |
           export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
-          uv build --no-build-isolation --out-dir dist-one
-          uv build --no-build-isolation --out-dir dist-two
+          uv build --no-build-isolation --out-dir dist/one
+          uv build --no-build-isolation --out-dir dist/two
       - name: Verify and checksum distributions
         run: >-
           python scripts/verify_release.py
           --tag "$GITHUB_REF_NAME"
-          --dist dist-one
-          --compare-dist dist-two
+          --dist dist/one
+          --compare-dist dist/two
           --write-checksums
       - name: Smoke-test the wheel outside the checkout
         run: |
           uv export --locked --no-dev --no-emit-project --format requirements.txt --output-file "$RUNNER_TEMP/unasked-runtime.txt"
           python -m venv "$RUNNER_TEMP/unasked-wheel"
           "$RUNNER_TEMP/unasked-wheel/bin/python" -m pip install --disable-pip-version-check --require-hashes -r "$RUNNER_TEMP/unasked-runtime.txt"
-          "$RUNNER_TEMP/unasked-wheel/bin/python" -m pip install --disable-pip-version-check --no-deps dist-one/*.whl
+          "$RUNNER_TEMP/unasked-wheel/bin/python" -m pip install --disable-pip-version-check --no-deps dist/one/*.whl
           cd "$RUNNER_TEMP"
           "$RUNNER_TEMP/unasked-wheel/bin/unasked" --json doctor
           "$RUNNER_TEMP/unasked-wheel/bin/unasked" --json resources export --destination unasked-kit
@@ -79,7 +79,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: unasked-release-${{ github.sha }}
-          path: dist-one/
+          path: dist/one/
           if-no-files-found: error
           retention-days: 7
 
@@ -99,7 +99,7 @@ jobs:
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
           name: unasked-release-${{ github.sha }}
-          path: dist-one
+          path: dist/one
       - name: Recheck source binding and local artifact hashes without a write token
         env:
           EXPECTED_TAG_COMMIT: ${{ needs.verify.outputs.tag_commit }}
@@ -109,8 +109,8 @@ jobs:
           test "$(git rev-parse "refs/tags/$GITHUB_REF_NAME")" = "$EXPECTED_TAG_OBJECT"
           test "$(git rev-parse "refs/tags/$GITHUB_REF_NAME^{}")" = "$EXPECTED_TAG_COMMIT"
           test "$(git rev-parse HEAD)" = "$EXPECTED_TAG_COMMIT"
-          (cd dist-one && sha256sum --check SHA256SUMS.txt)
-          python scripts/verify_release.py --tag "$GITHUB_REF_NAME" --dist dist-one
+          (cd dist/one && sha256sum --check SHA256SUMS.txt)
+          python scripts/verify_release.py --tag "$GITHUB_REF_NAME" --dist dist/one
       - name: Create a verified draft and publish only after asset checks
         env:
           EXPECTED_TAG_OBJECT: ${{ needs.verify.outputs.tag_object }}
@@ -126,16 +126,16 @@ jobs:
           }
           trap cleanup_draft ERR
           gh release create "$GITHUB_REF_NAME" \
-            dist-one/*.whl \
-            dist-one/*.tar.gz \
-            dist-one/SHA256SUMS.txt \
+            dist/one/*.whl \
+            dist/one/*.tar.gz \
+            dist/one/SHA256SUMS.txt \
             --verify-tag \
             --draft \
             --title "UNASKED $GITHUB_REF_NAME - Non-certifying M0 development path" \
             --notes-file ".github/releases/${GITHUB_REF_NAME#v}.md"
           created_draft=1
           test "$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets | length')" = 3
-          for file in dist-one/*.whl dist-one/*.tar.gz dist-one/SHA256SUMS.txt; do
+          for file in dist/one/*.whl dist/one/*.tar.gz dist/one/SHA256SUMS.txt; do
             name="$(basename "$file")"
             local_size="$(stat --format=%s "$file")"
             remote_size="$(gh release view "$GITHUB_REF_NAME" --json assets --jq ".assets[] | select(.name == \"$name\") | .size")"

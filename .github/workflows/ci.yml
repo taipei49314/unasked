@@ -71,20 +71,20 @@ jobs:
         run: |
           uv lock --check
           uv sync --locked --extra dev
-          uv build --no-build-isolation --out-dir dist-one
-          uv build --no-build-isolation --out-dir dist-two
+          uv build --no-build-isolation --out-dir dist/one
+          uv build --no-build-isolation --out-dir dist/two
       - name: Verify metadata, bytes, resources, and reproducibility
         run: >-
           python scripts/verify_release.py
-          --dist dist-one
-          --compare-dist dist-two
+          --dist dist/one
+          --compare-dist dist/two
           --write-checksums
       - name: Smoke-test the wheel outside the checkout
         run: |
           uv export --locked --no-dev --no-emit-project --format requirements.txt --output-file "$RUNNER_TEMP/unasked-runtime.txt"
           python -m venv "$RUNNER_TEMP/unasked-wheel"
           "$RUNNER_TEMP/unasked-wheel/bin/python" -m pip install --disable-pip-version-check --require-hashes -r "$RUNNER_TEMP/unasked-runtime.txt"
-          "$RUNNER_TEMP/unasked-wheel/bin/python" -m pip install --disable-pip-version-check --no-deps dist-one/*.whl
+          "$RUNNER_TEMP/unasked-wheel/bin/python" -m pip install --disable-pip-version-check --no-deps dist/one/*.whl
           cd "$RUNNER_TEMP"
           "$RUNNER_TEMP/unasked-wheel/bin/unasked" --version
           "$RUNNER_TEMP/unasked-wheel/bin/unasked" --json doctor
@@ -95,6 +95,6 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: unasked-distributions-${{ github.sha }}
-          path: dist-one/
+          path: dist/one/
           if-no-files-found: error
           retention-days: 14
