@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import unasked.workflow as workflow_module
 from unasked.artifacts import ArtifactStore
 from unasked.errors import IntegrityError, PolicyError, UsageError
 from unasked.util import canonical_json
@@ -37,6 +38,30 @@ def _capture_manifest(*, complete: bool = True) -> dict:
         "reason_codes": [] if complete else ["CAPTURE_ARTIFACT_LIMIT_EXCEEDED"],
         "scope": "worktree_and_git_metadata",
     }
+
+
+def test_capture_manifest_rejects_a_non_mapping_descriptor_even_if_prevalidated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest = _capture_manifest()
+    manifest["change_count"] = 1
+    manifest["changes"] = [
+        {
+            "change": "ADDED",
+            "before": None,
+            "after": "not-a-descriptor",
+        }
+    ]
+    monkeypatch.setattr(workflow_module, "_valid_capture_descriptor", lambda value: True)
+
+    valid, references = workflow_module._valid_complete_capture_manifest(
+        manifest,
+        store=ArtifactStore(tmp_path / "artifacts"),
+        artifact_byte_limit=1024,
+    )
+
+    assert valid is False
+    assert references == []
 
 
 def _stored_capture(

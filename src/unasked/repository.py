@@ -12,7 +12,7 @@ import hashlib
 import os
 import re
 import stat
-import subprocess
+import subprocess  # nosec B404
 import tempfile
 import uuid
 from collections.abc import Iterator
@@ -254,7 +254,11 @@ def _repository_layout(repository: str | os.PathLike[str]) -> _RepositoryLayout:
         git_dir = marker.resolve(strict=True)
     elif stat.S_ISREG(marker_stat.st_mode):
         marker_bytes = _read_regular_metadata(marker, limit=4096)
-        assert marker_bytes is not None
+        if marker_bytes is None:
+            raise IntegrityError(
+                "Required Git directory metadata is missing.",
+                details={"path": str(marker)},
+            )
         try:
             marker_text = marker_bytes.decode("utf-8").strip()
         except UnicodeDecodeError as exc:
@@ -364,7 +368,8 @@ def _spawn_git(
         command.extend((f"--git-dir={git_dir}", f"--work-tree={work_tree or repository}"))
     command.extend(args)
     try:
-        result = subprocess.run(
+        # TrustedGit pins executable identity and digest; shell execution is disabled.
+        result = subprocess.run(  # nosec B603
             command,
             check=False,
             capture_output=True,
@@ -412,7 +417,11 @@ def _copy_metadata_tree(source: Path, destination: Path) -> None:
                 pending.append((path, target))
             elif stat.S_ISREG(value.st_mode):
                 payload = _read_regular_metadata(path)
-                assert payload is not None
+                if payload is None:
+                    raise IntegrityError(
+                        "Required Git reference metadata is missing.",
+                        details={"path": str(path)},
+                    )
                 target.write_bytes(payload)
             else:
                 raise IntegrityError("Git reference metadata has an unsupported file type.")
@@ -434,7 +443,11 @@ def _safe_repository_view(
         _spawn_git(safe_root, init_args, git=git, check=True)
         safe_git_dir = safe_root / ".git"
         head = _read_regular_metadata(layout.git_dir / "HEAD", limit=4096)
-        assert head is not None
+        if head is None:
+            raise IntegrityError(
+                "Required Git HEAD metadata is missing.",
+                details={"path": str(layout.git_dir / "HEAD")},
+            )
         (safe_git_dir / "HEAD").write_bytes(head)
         _copy_metadata_tree(layout.common_dir / "refs", safe_git_dir / "refs")
         for filename in ("packed-refs", "shallow"):
@@ -666,7 +679,11 @@ def _isolated_repository_status(root: Path, *, trusted_git: _TrustedGit | None =
     head = _resolve_commit_with_git(root, "HEAD", git)
     source_index = layout.git_dir / "index"
     source_index_bytes = _read_regular_metadata(source_index)
-    assert source_index_bytes is not None
+    if source_index_bytes is None:
+        raise IntegrityError(
+            "Required Git index metadata is missing.",
+            details={"path": str(source_index)},
+        )
 
     with _safe_repository_view(layout, git) as safe_repository:
         safe_git_dir = safe_repository / ".git"

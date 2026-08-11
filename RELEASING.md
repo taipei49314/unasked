@@ -16,5 +16,6 @@ For each software release:
 6. verify that the Release tag, target commit, artifacts, and checksums agree.
 
 The release workflow refuses a tag whose version differs from package metadata or whose
-commit is not on `main`. Public/open-source distribution also requires an intentional license
-decision; the private v0.2.0 release does not infer one.
+commit is not on `main`. Public visibility and open-source licensing are separate decisions.
+The current source-visible distribution reserves all rights under `LICENSE`; changing that
+license requires an explicit owner decision and a separately reviewed pull request.

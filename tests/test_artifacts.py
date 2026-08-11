@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from unasked.artifacts import ArtifactStore
+from unasked.artifacts import ArtifactStore, ArtifactVerification
 from unasked.errors import IntegrityError, PolicyError, UsageError
 from unasked.util import canonical_json, sha256_bytes
 
@@ -89,3 +89,19 @@ def test_cas_rejects_path_traversal_inputs(tmp_path) -> None:
     with pytest.raises(UsageError):
         store.path_for("0" * 64 + "/outside")
     assert not (tmp_path / "outside.txt").exists()
+
+
+def test_cas_get_metadata_fails_closed_when_verified_metadata_is_missing(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = ArtifactStore(tmp_path / "artifacts")
+    digest = "0" * 64
+    report = ArtifactVerification(
+        valid=True,
+        sha256=digest,
+        path=tmp_path / "missing-object",
+    )
+    monkeypatch.setattr(ArtifactStore, "verify_or_raise", lambda self, value: report)
+
+    with pytest.raises(IntegrityError, match="metadata is missing"):
+        store.get_metadata(digest)

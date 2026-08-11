@@ -39,8 +39,13 @@ _SOURCE_FILES = (
     ".gitignore",
     ".python-version",
     "CHANGELOG.md",
+    "CODE_OF_CONDUCT.md",
+    "CONTRIBUTING.md",
+    "LICENSE",
     "README.md",
     "RELEASING.md",
+    "SECURITY.md",
+    "SUPPORT.md",
     "pyproject.toml",
     "unasked-threat-model.md",
     "uv.lock",
@@ -143,6 +148,12 @@ def _expected_metadata_values(root: Path, *, name: str, version: str) -> dict[st
 
     keywords = _string_list(project.get("keywords", []), field="keywords")
     classifiers = _string_list(project.get("classifiers", []), field="classifiers")
+    license_expression = project.get("license")
+    license_files = _string_list(project.get("license-files", []), field="license-files")
+    if not isinstance(license_expression, str) or not license_expression:
+        raise ReleaseCheckError("Project license must be a non-empty SPDX expression string.")
+    if license_files != ["LICENSE"]:
+        raise ReleaseCheckError("The release verifier requires LICENSE as the sole license file.")
     return {
         "Metadata-Version": ["2.4"],
         "Name": [name],
@@ -155,6 +166,8 @@ def _expected_metadata_values(root: Path, *, name: str, version: str) -> dict[st
         "Requires-Dist": dependencies + extra_requirements,
         "Provides-Extra": sorted(optional),
         "Description-Content-Type": ["text/markdown"],
+        "License-Expression": [license_expression],
+        "License-File": license_files,
     }
 
 
@@ -341,6 +354,7 @@ def _wheel_expected_members(root: Path, *, name: str, version: str) -> set[str]:
             f"{dist_info}/METADATA",
             f"{dist_info}/WHEEL",
             f"{dist_info}/entry_points.txt",
+            f"{dist_info}/licenses/LICENSE",
             f"{dist_info}/RECORD",
         }
     )

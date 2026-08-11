@@ -1,0 +1,30 @@
+name: Feature request
+description: Propose a bounded improvement without making a milestone claim
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What concrete workflow or evidence gap should be addressed?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe inputs, outputs, failure behavior, and trust boundaries.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: checkboxes
+    id: boundary
+    attributes:
+      label: Claim boundary
+      options:
+        - label: This request does not treat model output as evidence or claim M0.
+          required: true

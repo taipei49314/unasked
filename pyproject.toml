@@ -4,9 +4,11 @@ build-backend = "hatchling.build"
 
 [project]
 name = "unasked-research"
-version = "0.2.0"
+version = "0.2.1"
 description = "A research harness for blind, evidence-gated repository investigation."
 readme = "README.md"
+license = "LicenseRef-Proprietary"
+license-files = ["LICENSE"]
 requires-python = ">=3.11,<3.15"
 keywords = ["evidence", "reproducibility", "repository", "research"]
 classifiers = [
@@ -35,6 +37,10 @@ dev = [
   "pytest>=8.3,<9",
   "pytest-cov>=6,<7",
   "ruff>=0.9,<1",
+]
+security = [
+  "bandit==1.9.4",
+  "pip-audit==2.10.1",
 ]
 
 [project.scripts]

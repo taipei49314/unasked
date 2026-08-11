@@ -10,7 +10,7 @@ from __future__ import annotations
 import math
 import os
 import re
-import subprocess
+import subprocess  # nosec B404
 import time
 from collections.abc import Collection, Mapping
 from pathlib import Path
@@ -265,7 +265,8 @@ class RestrictedExecutor:
         stdout: str
         stderr: str
         try:
-            completed = subprocess.run(
+            # The executable is resolved and allowlisted; shell execution is disabled.
+            completed = subprocess.run(  # nosec B603
                 executed_argv,
                 cwd=command_cwd,
                 env=environment,

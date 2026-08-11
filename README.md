@@ -2,6 +2,9 @@
 
 > A research harness for blind, evidence-gated repository investigation.
 
+[![CI](https://github.com/taipei49314/unasked/actions/workflows/ci.yml/badge.svg)](https://github.com/taipei49314/unasked/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/taipei49314/unasked/actions/workflows/codeql.yml/badge.svg)](https://github.com/taipei49314/unasked/actions/workflows/codeql.yml)
+
 UNASKED records repository observations, falsifiable hypotheses, restricted experiments,
 counterevidence, clean replay, and independent verdict authorization. Its central rule is
 that model output is never evidence and a proposer can never promote its own result to
@@ -20,16 +23,20 @@ fail closed instead of lazily fetching missing partial-clone objects from a remo
 
 ### GitHub Release wheel
 
-Download the wheel and checksum manifest from the private GitHub Release, verify the wheel
-hash against `SHA256SUMS.txt`, then install it:
+Download the wheel and checksum manifest from the public GitHub Release, verify the wheel
+hash against `SHA256SUMS.txt`, then install it. The following PowerShell example fails if the
+published checksum and downloaded wheel differ:
 
 ```powershell
-gh release download v0.2.0 --repo taipei49314/unasked `
-  --pattern "unasked_research-0.2.0-py3-none-any.whl" `
-  --pattern "SHA256SUMS.txt"
-Get-FileHash -Algorithm SHA256 .\unasked_research-0.2.0-py3-none-any.whl
-Get-Content .\SHA256SUMS.txt
-uv tool install .\unasked_research-0.2.0-py3-none-any.whl
+$version = "0.2.1"
+$wheel = "unasked_research-$version-py3-none-any.whl"
+$release = "https://github.com/taipei49314/unasked/releases/download/v$version"
+Invoke-WebRequest "$release/$wheel" -OutFile $wheel
+Invoke-WebRequest "$release/SHA256SUMS.txt" -OutFile SHA256SUMS.txt
+$expected = (Get-Content SHA256SUMS.txt | Where-Object { $_ -match [regex]::Escape($wheel) } | ForEach-Object { ($_ -split "\s+")[0] })
+$actual = (Get-FileHash -Algorithm SHA256 $wheel).Hash.ToLowerInvariant()
+if ($expected -ne $actual) { throw "Release checksum mismatch" }
+uv tool install ".\$wheel"
 unasked --json resources export --destination .unasked-kit
 unasked --json doctor
 ```
@@ -100,7 +107,7 @@ repository. All target writes occur only in temporary worktrees.
 
 Proposal, plan, challenge, and review JSON examples are in [`examples/`](examples/) and in
 the exported resource kit. Actor IDs are recorded but not authenticated in the v0.1 evidence
-protocol implemented by software v0.2.0; organizational separation remains an external
+protocol implemented by the v0.2 software series; organizational separation remains an external
 control.
 
 ### Fail-closed replay
@@ -185,10 +192,23 @@ The repository-grounded security analysis is in
 ## Development
 
 ```powershell
+uv sync --locked --extra dev --extra security
 uv run ruff check .
 uv run ruff format --check .
+uv run bandit -q -r src scripts
+uv export --locked --no-dev --no-emit-project --format requirements.txt --output-file .runtime-requirements.txt
+uv run pip-audit -r .runtime-requirements.txt --progress-spinner off
 uv run pytest
 python scripts/verify_release.py
 ```
 
-See [`RELEASING.md`](RELEASING.md) for the tag-bound, reproducible GitHub Release process.
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for contribution policy,
+[`SECURITY.md`](SECURITY.md) for confidential vulnerability reporting, and
+[`RELEASING.md`](RELEASING.md) for the tag-bound, reproducible GitHub Release process.
+
+## License and public status
+
+This repository is publicly readable but is not currently offered under an open-source
+license. Copyright is reserved and no permission to copy, modify, redistribute, or create
+derivative works is granted except where applicable law allows it. See [`LICENSE`](LICENSE).
+Public visibility is not an M0 claim and does not change the non-certifying boundary above.

@@ -4,7 +4,7 @@ import copy
 import json
 import math
 import os
-import subprocess
+import subprocess  # nosec B404
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -270,7 +270,8 @@ class JsonSubprocessProvider:
         self._verify_integrity()
         payload = canonical_json(request) + b"\n"
         try:
-            process = subprocess.Popen(
+            # The executable identity is frozen and rechecked immediately before spawn.
+            process = subprocess.Popen(  # nosec B603
                 self.argv,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
