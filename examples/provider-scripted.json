@@ -1,0 +1,5 @@
+{
+  "kind": "scripted",
+  "model": "development-model",
+  "responses_file": "provider-stop.jsonl"
+}

@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.11", "3.14"]
+    steps:
+      - name: Check out the exact commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install the pinned package manager
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+        with:
+          enable-cache: false
+          version: "0.12.2"
+      - name: Verify and install the lock
+        run: |
+          uv lock --check
+          uv sync --locked --extra dev
+      - name: Lint and format check
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+      - name: Run the complete test suite
+        run: uv run pytest
+
+  build:
+    name: Reproducible distributions
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the exact commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11"
+      - name: Install the pinned package manager
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+        with:
+          enable-cache: false
+          version: "0.12.2"
+      - name: Freeze the build timestamp
+        run: echo "SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)" >> "$GITHUB_ENV"
+      - name: Build twice from the same source
+        run: |
+          uv lock --check
+          uv sync --locked --extra dev
+          uv build --no-build-isolation --out-dir dist/one
+          uv build --no-build-isolation --out-dir dist/two
+      - name: Verify metadata, bytes, resources, and reproducibility
+        run: >-
+          python scripts/verify_release.py
+          --dist dist/one
+          --compare-dist dist/two
+          --write-checksums
+      - name: Smoke-test the wheel outside the checkout
+        run: |
+          uv export --locked --no-dev --no-emit-project --format requirements.txt --output-file "$RUNNER_TEMP/unasked-runtime.txt"
+          python -m venv "$RUNNER_TEMP/unasked-wheel"
+          "$RUNNER_TEMP/unasked-wheel/bin/python" -m pip install --disable-pip-version-check --require-hashes -r "$RUNNER_TEMP/unasked-runtime.txt"
+          "$RUNNER_TEMP/unasked-wheel/bin/python" -m pip install --disable-pip-version-check --no-deps dist/one/*.whl
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/unasked-wheel/bin/unasked" --version
+          "$RUNNER_TEMP/unasked-wheel/bin/unasked" --json doctor
+          "$RUNNER_TEMP/unasked-wheel/bin/unasked" --json resources export --destination unasked-kit
+          test -f unasked-kit/protocols/m0-development-v0.1.json
+          test -f unasked-kit/examples/m0-budget.json
+      - name: Upload verified distributions
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: unasked-distributions-${{ github.sha }}
+          path: dist/one/
+          if-no-files-found: error
+          retention-days: 14

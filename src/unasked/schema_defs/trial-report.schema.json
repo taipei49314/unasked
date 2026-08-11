@@ -1,0 +1,291 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.unasked.dev/v0.1/trial-report.schema.json",
+  "title": "UNASKED deterministic M0 trial aggregate report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "report_type",
+    "suite_id",
+    "manifest_hash",
+    "manifest",
+    "ablation_variants",
+    "variant_results",
+    "variant_reports",
+    "gates",
+    "status",
+    "m0_demonstrated",
+    "report_hash"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "report_type": { "const": "M0_TRIAL_AGGREGATE" },
+    "suite_id": { "type": "string", "minLength": 1 },
+    "manifest_hash": {
+      "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256"
+    },
+    "manifest": {
+      "$ref": "https://schemas.unasked.dev/v0.1/trial-manifest.schema.json"
+    },
+    "ablation_variants": {
+      "const": [
+        "deterministic-detectors-only",
+        "read-only-llm-reviewer",
+        "llm-tools-no-experiment-gate",
+        "experiment-loop-without-falsifier",
+        "full-evidence-gated-system"
+      ]
+    },
+    "variant_results": {
+      "type": "array",
+      "maxItems": 5,
+      "items": { "$ref": "#/$defs/variantResult" },
+      "uniqueItems": true
+    },
+    "variant_reports": {
+      "type": "array",
+      "maxItems": 5,
+      "items": { "$ref": "#/$defs/variantReport" },
+      "uniqueItems": true
+    },
+    "gates": { "$ref": "#/$defs/gates" },
+    "status": { "enum": ["M0_DEMONSTRATED", "NON_CERTIFYING"] },
+    "m0_demonstrated": { "type": "boolean" },
+    "report_hash": {
+      "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "status": { "const": "M0_DEMONSTRATED" } },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "m0_demonstrated": { "const": true },
+          "gates": { "$ref": "#/$defs/passingGates" }
+        }
+      },
+      "else": {
+        "properties": { "m0_demonstrated": { "const": false } }
+      }
+    }
+  ],
+  "$defs": {
+    "variant": {
+      "enum": [
+        "deterministic-detectors-only",
+        "read-only-llm-reviewer",
+        "llm-tools-no-experiment-gate",
+        "experiment-loop-without-falsifier",
+        "full-evidence-gated-system"
+      ]
+    },
+    "fixedDecimal": {
+      "type": "string",
+      "pattern": "^(?:0|[1-9][0-9]*)\\.[0-9]{6}$"
+    },
+    "positiveFixedDecimal": {
+      "allOf": [
+        { "$ref": "#/$defs/fixedDecimal" },
+        { "not": { "const": "0.000000" } }
+      ]
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "case_id",
+        "claimed_verified",
+        "verified",
+        "unasked",
+        "novel",
+        "replay_passed",
+        "counterevidence_passed",
+        "external_authority",
+        "decision_impact",
+        "evidence_complete"
+      ],
+      "properties": {
+        "case_id": { "type": "string", "minLength": 1 },
+        "claimed_verified": { "type": "boolean" },
+        "verified": { "type": "boolean" },
+        "unasked": { "type": "boolean" },
+        "novel": { "type": "boolean" },
+        "replay_passed": { "type": "boolean" },
+        "counterevidence_passed": { "type": "boolean" },
+        "external_authority": { "type": "boolean" },
+        "decision_impact": { "type": "boolean" },
+        "evidence_complete": { "type": "boolean" }
+      }
+    },
+    "variantResult": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["variant", "manifest_hash", "protocol_hash", "normalized_budget", "findings"],
+      "properties": {
+        "variant": { "$ref": "#/$defs/variant" },
+        "manifest_hash": {
+          "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256"
+        },
+        "protocol_hash": {
+          "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256"
+        },
+        "normalized_budget": { "$ref": "#/$defs/positiveFixedDecimal" },
+        "findings": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/finding" },
+          "uniqueItems": true
+        }
+      }
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cases",
+        "positive_cases",
+        "control_cases",
+        "findings",
+        "claimed_verified",
+        "trusted_verified_positives",
+        "false_verified_claims",
+        "false_verified_controls"
+      ],
+      "properties": {
+        "cases": { "type": "integer", "minimum": 0 },
+        "positive_cases": { "type": "integer", "minimum": 0 },
+        "control_cases": { "type": "integer", "minimum": 0 },
+        "findings": { "type": "integer", "minimum": 0 },
+        "claimed_verified": { "type": "integer", "minimum": 0 },
+        "trusted_verified_positives": { "type": "integer", "minimum": 0 },
+        "false_verified_claims": { "type": "integer", "minimum": 0 },
+        "false_verified_controls": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "trusted_discovery_precision",
+        "hidden_discovery_recall",
+        "control_false_positive_rate",
+        "false_verified_claim_rate",
+        "clean_reproduction_rate",
+        "decision_impact_rate",
+        "evidence_completeness",
+        "impact_weighted_verified_yield",
+        "tudy"
+      ],
+      "properties": {
+        "trusted_discovery_precision": { "$ref": "#/$defs/fixedDecimal" },
+        "hidden_discovery_recall": { "$ref": "#/$defs/fixedDecimal" },
+        "control_false_positive_rate": { "$ref": "#/$defs/fixedDecimal" },
+        "false_verified_claim_rate": { "$ref": "#/$defs/fixedDecimal" },
+        "clean_reproduction_rate": { "$ref": "#/$defs/fixedDecimal" },
+        "decision_impact_rate": { "$ref": "#/$defs/fixedDecimal" },
+        "evidence_completeness": { "$ref": "#/$defs/fixedDecimal" },
+        "impact_weighted_verified_yield": { "$ref": "#/$defs/fixedDecimal" },
+        "tudy": { "$ref": "#/$defs/fixedDecimal" }
+      }
+    },
+    "caseIds": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "variantReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "variant",
+        "manifest_hash",
+        "protocol_hash",
+        "normalized_budget",
+        "coverage_complete",
+        "counts",
+        "metrics",
+        "trusted_case_ids",
+        "false_verified_case_ids",
+        "false_verified_control_ids"
+      ],
+      "properties": {
+        "variant": { "$ref": "#/$defs/variant" },
+        "manifest_hash": {
+          "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256"
+        },
+        "protocol_hash": {
+          "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256"
+        },
+        "normalized_budget": { "$ref": "#/$defs/positiveFixedDecimal" },
+        "coverage_complete": { "type": "boolean" },
+        "counts": { "$ref": "#/$defs/counts" },
+        "metrics": { "$ref": "#/$defs/metrics" },
+        "trusted_case_ids": { "$ref": "#/$defs/caseIds" },
+        "false_verified_case_ids": { "$ref": "#/$defs/caseIds" },
+        "false_verified_control_ids": { "$ref": "#/$defs/caseIds" }
+      }
+    },
+    "gates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "benchmark_sealed",
+        "independent_custody",
+        "sealed_before_explorer",
+        "case_mix_exact",
+        "ablation_coverage_complete",
+        "manifest_binding_complete",
+        "protocol_frozen",
+        "full_system_case_coverage",
+        "positive_threshold_met",
+        "control_threshold_met",
+        "clean_replay_complete",
+        "context_provenance_complete",
+        "no_false_verified_claims",
+        "external_evidence_verified"
+      ],
+      "properties": {
+        "benchmark_sealed": { "type": "boolean" },
+        "independent_custody": { "type": "boolean" },
+        "sealed_before_explorer": { "type": "boolean" },
+        "case_mix_exact": { "type": "boolean" },
+        "ablation_coverage_complete": { "type": "boolean" },
+        "manifest_binding_complete": { "type": "boolean" },
+        "protocol_frozen": { "type": "boolean" },
+        "full_system_case_coverage": { "type": "boolean" },
+        "positive_threshold_met": { "type": "boolean" },
+        "control_threshold_met": { "type": "boolean" },
+        "clean_replay_complete": { "type": "boolean" },
+        "context_provenance_complete": { "type": "boolean" },
+        "no_false_verified_claims": { "type": "boolean" },
+        "external_evidence_verified": { "type": "boolean" }
+      }
+    },
+    "passingGates": {
+      "allOf": [
+        { "$ref": "#/$defs/gates" },
+        {
+          "properties": {
+            "benchmark_sealed": { "const": true },
+            "independent_custody": { "const": true },
+            "sealed_before_explorer": { "const": true },
+            "case_mix_exact": { "const": true },
+            "ablation_coverage_complete": { "const": true },
+            "manifest_binding_complete": { "const": true },
+            "protocol_frozen": { "const": true },
+            "full_system_case_coverage": { "const": true },
+            "positive_threshold_met": { "const": true },
+            "control_threshold_met": { "const": true },
+            "clean_replay_complete": { "const": true },
+            "context_provenance_complete": { "const": true },
+            "no_false_verified_claims": { "const": true },
+            "external_evidence_verified": { "const": true }
+          }
+        }
+      ]
+    }
+  }
+}

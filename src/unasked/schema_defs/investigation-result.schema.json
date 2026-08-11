@@ -1,0 +1,277 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.unasked.dev/v0.1/investigation-result.schema.json",
+  "title": "UNASKED bounded investigation result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "started_at",
+    "completed_at",
+    "status",
+    "stop_reason",
+    "mode",
+    "provider",
+    "budget",
+    "result",
+    "provenance",
+    "certification"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "run_id": {
+      "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier"
+    },
+    "started_at": {
+      "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/timestamp"
+    },
+    "completed_at": {
+      "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/timestamp"
+    },
+    "status": { "enum": ["COMPLETED", "BUDGET_EXHAUSTED", "PROVIDER_FAILED"] },
+    "stop_reason": { "type": "string" },
+    "mode": {
+      "enum": [
+        "read_only_llm",
+        "llm_tools_no_experiment_gate",
+        "experiment_loop_no_falsifier",
+        "full_evidence_gated"
+      ]
+    },
+    "provider": { "$ref": "#/$defs/provider" },
+    "budget": { "$ref": "#/$defs/budgetMeter" },
+    "result": { "$ref": "#/$defs/investigationSummary" },
+    "provenance": { "$ref": "#/$defs/provenance" },
+    "certification": { "$ref": "#/$defs/certification" },
+    "ledger": { "$ref": "#/$defs/ledgerVerification" },
+    "tool_version": { "type": "string", "minLength": 1 },
+    "claim": {
+      "const": "A research harness for blind, evidence-gated repository investigation."
+    },
+    "provider_failed": { "type": "boolean" }
+  },
+  "$defs": {
+    "provider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "model",
+        "adapter",
+        "network_isolation_enforced",
+        "certifying"
+      ],
+      "properties": {
+        "provider": { "enum": ["scripted", "json-subprocess"] },
+        "model": { "type": "string", "minLength": 1 },
+        "adapter": { "enum": ["offline_recorded_json", "canonical_json_stdio"] },
+        "response_count": { "type": "integer", "minimum": 0 },
+        "transcript_hash": {
+          "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256"
+        },
+        "executable": { "type": "string", "minLength": 1 },
+        "executable_sha256": {
+          "oneOf": [
+            { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" },
+            { "type": "null" }
+          ]
+        },
+        "argv_hash": {
+          "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256"
+        },
+        "bound_files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "sha256"],
+            "properties": {
+              "path": { "type": "string", "minLength": 1 },
+              "sha256": {
+                "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256"
+              }
+            }
+          }
+        },
+        "provider_bundle_hash": {
+          "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256"
+        },
+        "timeout_seconds": { "type": "integer", "minimum": 1 },
+        "network_isolation_enforced": { "type": "boolean" },
+        "certifying": { "type": "boolean" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "provider": { "const": "scripted" } },
+            "required": ["provider"]
+          },
+          "then": { "required": ["response_count", "transcript_hash"] }
+        },
+        {
+          "if": {
+            "properties": { "provider": { "const": "json-subprocess" } },
+            "required": ["provider"]
+          },
+          "then": {
+            "required": [
+              "executable",
+              "executable_sha256",
+              "argv_hash",
+              "bound_files",
+              "provider_bundle_hash",
+              "timeout_seconds"
+            ]
+          }
+        }
+      ]
+    },
+    "budgetMeter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["limits", "consumed"],
+      "properties": {
+        "limits": {
+          "$ref": "https://schemas.unasked.dev/v0.1/budget-policy.schema.json"
+        },
+        "consumed": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "turns",
+            "provider_calls",
+            "tool_calls",
+            "candidates",
+            "experiments",
+            "request_bytes",
+            "response_bytes",
+            "elapsed_seconds"
+          ],
+          "properties": {
+            "turns": { "type": "integer", "minimum": 0 },
+            "provider_calls": { "type": "integer", "minimum": 0 },
+            "tool_calls": { "type": "integer", "minimum": 0 },
+            "candidates": { "type": "integer", "minimum": 0 },
+            "experiments": { "type": "integer", "minimum": 0 },
+            "request_bytes": { "type": "integer", "minimum": 0 },
+            "response_bytes": { "type": "integer", "minimum": 0 },
+            "elapsed_seconds": { "type": "number", "minimum": 0 }
+          }
+        }
+      }
+    },
+    "investigationSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidate_count",
+        "candidate_states",
+        "verified_count",
+        "next_required_stages"
+      ],
+      "properties": {
+        "candidate_count": { "type": "integer", "minimum": 0 },
+        "candidate_states": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/lifecycleState"
+          },
+          "additionalProperties": { "type": "integer", "minimum": 1 }
+        },
+        "verified_count": { "type": "integer", "minimum": 0 },
+        "next_required_stages": {
+          "const": [
+            "independent_falsifier",
+            "external_isolated_replay",
+            "independent_reviews",
+            "authority_verdict"
+          ]
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "turn_count",
+        "turn_artifact_hashes",
+        "budget_policy_hash",
+        "target_snapshot_hash",
+        "protocol_hash",
+        "human_steering_count"
+      ],
+      "properties": {
+        "turn_count": { "type": "integer", "minimum": 0 },
+        "turn_artifact_hashes": {
+          "type": "array",
+          "items": {
+            "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256"
+          },
+          "uniqueItems": true
+        },
+        "budget_policy_hash": {
+          "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256"
+        },
+        "target_snapshot_hash": {
+          "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256"
+        },
+        "protocol_hash": {
+          "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256"
+        },
+        "human_steering_count": { "const": 0 }
+      }
+    },
+    "certification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "reason_codes",
+        "m0_demonstrated",
+        "engineering_demo_completed",
+        "allowed_claim"
+      ],
+      "properties": {
+        "status": { "const": "NON_CERTIFYING" },
+        "reason_codes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "enum": [
+              "BENCHMARK_NOT_INDEPENDENTLY_SEALED",
+              "DEVELOPMENT_PROVIDER_NON_CERTIFYING",
+              "PROVIDER_NETWORK_ISOLATION_UNPROVEN"
+            ]
+          },
+          "contains": { "const": "BENCHMARK_NOT_INDEPENDENTLY_SEALED" },
+          "uniqueItems": true
+        },
+        "m0_demonstrated": { "const": false },
+        "engineering_demo_completed": { "type": "boolean" },
+        "allowed_claim": {
+          "const": "A research harness for blind, evidence-gated repository investigation."
+        }
+      }
+    },
+    "ledgerVerification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["valid", "entries", "last_hash", "error", "line", "sequence", "details"],
+      "properties": {
+        "valid": { "const": true },
+        "entries": { "type": "integer", "minimum": 0 },
+        "last_hash": {
+          "oneOf": [
+            { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" },
+            { "type": "null" }
+          ]
+        },
+        "error": { "type": "null" },
+        "line": { "type": "null" },
+        "sequence": { "type": "null" },
+        "details": { "type": "object" }
+      }
+    }
+  }
+}

@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.unasked.dev/v0.1/discovery-certificate.schema.json",
+  "title": "UNASKED verified discovery certificate",
+  "description": "A certificate is an evidence-bound record, not proof by itself.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "certificate_id",
+    "run_id",
+    "candidate_id",
+    "hypothesis_id",
+    "issued_at",
+    "status",
+    "belief_update",
+    "expectation_refs",
+    "observation_refs",
+    "main_hypothesis",
+    "alternative_explanations",
+    "falsification_conditions",
+    "experiment_plan_ref",
+    "experiment_result_ref",
+    "counterevidence_review_ref",
+    "replay_result_ref",
+    "novelty_review_ref",
+    "materiality_review_ref",
+    "knowledge_boundary_hash",
+    "decision_impact",
+    "limitations",
+    "unconfirmed",
+    "verdict_ref",
+    "authorization",
+    "evidence_hashes",
+    "evidence_bundle_hash",
+    "snapshot_binding"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "certificate_id": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" },
+    "run_id": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" },
+    "candidate_id": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" },
+    "hypothesis_id": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" },
+    "issued_at": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/timestamp" },
+    "status": { "const": "VERIFIED" },
+    "belief_update": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["before", "after"],
+      "properties": {
+        "before": { "type": "string", "minLength": 1 },
+        "after": { "type": "string", "minLength": 1 }
+      }
+    },
+    "expectation_refs": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/artifactReference" }
+    },
+    "observation_refs": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/artifactReference" }
+    },
+    "main_hypothesis": { "type": "string", "minLength": 1 },
+    "alternative_explanations": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+    "falsification_conditions": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+    "experiment_plan_ref": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/artifactReference" },
+    "experiment_result_ref": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/artifactReference" },
+    "counterevidence_review_ref": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/artifactReference" },
+    "replay_result_ref": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/artifactReference" },
+    "novelty_review_ref": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/artifactReference" },
+    "materiality_review_ref": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/artifactReference" },
+    "knowledge_boundary_hash": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" },
+    "decision_impact": { "type": "string", "minLength": 1 },
+    "limitations": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "unconfirmed": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "verdict_ref": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/artifactReference" },
+    "authorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["authority_actor", "policy_hash", "authorized_at"],
+      "properties": {
+        "authority_actor": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/authorityActor" },
+        "policy_hash": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" },
+        "authorized_at": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/timestamp" }
+      }
+    },
+    "evidence_hashes": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" },
+      "uniqueItems": true
+    },
+    "evidence_bundle_hash": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" },
+    "snapshot_binding": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/snapshotBinding" }
+  }
+}

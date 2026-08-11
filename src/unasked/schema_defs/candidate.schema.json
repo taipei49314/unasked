@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.unasked.dev/v0.1/candidate.schema.json",
+  "title": "UNASKED discrepancy candidate",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "candidate_id",
+    "run_id",
+    "created_at",
+    "state",
+    "expectation_ids",
+    "observation_ids",
+    "discrepancy",
+    "materiality_question",
+    "origin",
+    "provenance",
+    "proposed_by",
+    "snapshot_hash"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "candidate_id": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" },
+    "run_id": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" },
+    "created_at": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/timestamp" },
+    "state": { "const": "CANDIDATE" },
+    "expectation_ids": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" },
+      "uniqueItems": true
+    },
+    "observation_ids": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" },
+      "uniqueItems": true
+    },
+    "discrepancy": { "type": "string", "minLength": 1 },
+    "materiality_question": { "type": "string", "minLength": 1 },
+    "origin": { "enum": ["DETERMINISTIC_DETECTOR", "MODEL_EXPLORER"] },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["prompt_hash", "context_manifest_hash", "human_direction_provided"],
+      "properties": {
+        "prompt_hash": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" },
+        "context_manifest_hash": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" },
+        "human_direction_provided": { "type": "boolean" }
+      }
+    },
+    "proposed_by": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/actor" },
+    "snapshot_hash": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" }
+  }
+}

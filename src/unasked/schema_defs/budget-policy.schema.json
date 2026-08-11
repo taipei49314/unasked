@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.unasked.dev/v0.1/budget-policy.schema.json",
+  "title": "UNASKED bounded investigation budget policy",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "max_turns",
+    "max_provider_calls",
+    "max_tool_calls",
+    "max_candidates",
+    "max_experiments",
+    "max_experiment_commands",
+    "max_wall_seconds",
+    "max_request_bytes",
+    "max_response_bytes",
+    "max_total_request_bytes",
+    "max_file_bytes",
+    "max_search_matches",
+    "max_inventory_entries",
+    "max_observations"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "max_turns": { "type": "integer", "minimum": 1 },
+    "max_provider_calls": { "type": "integer", "minimum": 1 },
+    "max_tool_calls": { "type": "integer", "minimum": 0 },
+    "max_candidates": { "type": "integer", "minimum": 0 },
+    "max_experiments": { "type": "integer", "minimum": 0 },
+    "max_experiment_commands": { "type": "integer", "minimum": 0 },
+    "max_wall_seconds": { "type": "integer", "minimum": 1 },
+    "max_request_bytes": { "type": "integer", "minimum": 1 },
+    "max_response_bytes": { "type": "integer", "minimum": 1 },
+    "max_total_request_bytes": { "type": "integer", "minimum": 1 },
+    "max_file_bytes": { "type": "integer", "minimum": 0 },
+    "max_search_matches": { "type": "integer", "minimum": 0 },
+    "max_inventory_entries": { "type": "integer", "minimum": 0 },
+    "max_observations": { "type": "integer", "minimum": 0 }
+  }
+}

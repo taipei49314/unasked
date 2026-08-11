@@ -1,0 +1,6 @@
+{
+  "conclusion": "PASS",
+  "findings": ["The result changes a predeclared engineering decision."],
+  "evidence_hashes": ["replace-with-cas-sha256"],
+  "decision_impact": "Block release until the expectation and observed behavior are reconciled."
+}

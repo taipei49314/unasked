@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.unasked.dev/v0.1/verdict.schema.json",
+  "title": "UNASKED externally authorized verdict",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "verdict_id",
+    "candidate_id",
+    "run_id",
+    "issued_at",
+    "status",
+    "authority_actor",
+    "policy_hash",
+    "reasons",
+    "checks",
+    "proposer_actor_id",
+    "executor_actor_id",
+    "separation_attestation",
+    "evidence_bundle_hash"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "verdict_id": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" },
+    "candidate_id": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" },
+    "run_id": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" },
+    "issued_at": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/timestamp" },
+    "status": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/terminalState" },
+    "authority_actor": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/authorityActor" },
+    "policy_hash": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" },
+    "reasons": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "snapshot_bound",
+        "evidence_complete",
+        "clean_replay_passed",
+        "counterevidence_completed",
+        "known_issue_scan_completed",
+        "protocol_frozen",
+        "hashes_consistent",
+        "authority_separated",
+        "materiality_approved"
+      ],
+      "properties": {
+        "snapshot_bound": { "type": "boolean" },
+        "evidence_complete": { "type": "boolean" },
+        "clean_replay_passed": { "type": "boolean" },
+        "counterevidence_completed": { "type": "boolean" },
+        "known_issue_scan_completed": { "type": "boolean" },
+        "protocol_frozen": { "type": "boolean" },
+        "hashes_consistent": { "type": "boolean" },
+        "authority_separated": { "type": "boolean" },
+        "materiality_approved": { "type": "boolean" }
+      }
+    },
+    "proposer_actor_id": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" },
+    "executor_actor_id": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" },
+    "separation_attestation": { "const": true },
+    "evidence_bundle_hash": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" },
+    "replay_result_hash": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" },
+    "counterevidence_review_hash": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" },
+    "novelty_review_hash": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" },
+    "materiality_review_hash": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "status": { "const": "VERIFIED" } },
+        "required": ["status"]
+      },
+      "then": {
+        "required": [
+          "replay_result_hash",
+          "counterevidence_review_hash",
+          "novelty_review_hash",
+          "materiality_review_hash"
+        ],
+        "properties": {
+          "checks": {
+            "properties": {
+              "snapshot_bound": { "const": true },
+              "evidence_complete": { "const": true },
+              "clean_replay_passed": { "const": true },
+              "counterevidence_completed": { "const": true },
+              "known_issue_scan_completed": { "const": true },
+              "protocol_frozen": { "const": true },
+              "hashes_consistent": { "const": true },
+              "authority_separated": { "const": true },
+              "materiality_approved": { "const": true }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

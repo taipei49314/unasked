@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.unasked.dev/v0.1/trial-manifest.schema.json",
+  "title": "UNASKED M0 trial manifest",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["suite_id", "cases", "custody"],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "suite_id": { "type": "string", "minLength": 1 },
+    "cases": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/case" }
+    },
+    "custody": { "$ref": "#/$defs/custody" }
+  },
+  "$defs": {
+    "nonNegativeDecimal": {
+      "oneOf": [
+        { "type": "number", "minimum": 0 },
+        {
+          "type": "string",
+          "pattern": "^(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$"
+        }
+      ]
+    },
+    "case": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["case_id", "kind", "impact_weight"],
+      "properties": {
+        "case_id": { "type": "string", "minLength": 1 },
+        "kind": { "enum": ["POSITIVE", "CONTROL", "positive", "control"] },
+        "impact_weight": { "$ref": "#/$defs/nonNegativeDecimal" }
+      }
+    },
+    "custody": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["status", "independent", "sealed_before_explorer"],
+      "properties": {
+        "status": { "enum": ["SEALED", "UNSEALED", "sealed", "unsealed"] },
+        "independent": { "type": "boolean" },
+        "sealed_before_explorer": { "type": "boolean" }
+      }
+    }
+  }
+}

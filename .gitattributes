@@ -1,0 +1,11 @@
+* text=auto eol=lf
+
+*.json text eol=lf
+*.jsonl text eol=lf
+*.md text eol=lf
+*.py text eol=lf
+*.toml text eol=lf
+*.lock text eol=lf
+
+# The charter copy is hash-bound as exact bytes; never apply line-ending conversion.
+constitution/UNASKED_NORTH_STAR_v0.1.md -text
