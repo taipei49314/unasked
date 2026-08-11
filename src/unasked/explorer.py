@@ -430,9 +430,9 @@ class BoundedExplorer:
                 raise PolicyError("The selected ablation mode does not permit an experiment plan.")
             meter.require_capacity("experiments")
             commands = plan_payload["commands"]
-            command_count = len(commands) + int(
-                not any(command.get("command_id") == "CMD-CAPTURE-DIFF" for command in commands)
-            )
+            # The authority-controlled diff capture is always appended.  A model
+            # cannot supply or replace the reserved command to reduce its budget.
+            command_count = len(commands) + 1
             if command_count > self.budget.max_experiment_commands:
                 raise BudgetExhausted("MAX_EXPERIMENT_COMMANDS")
             meter.require_wall_capacity(plan_payload["wall_seconds"] * command_count)

@@ -15,11 +15,35 @@ valid and expected result.
 
 ## Install
 
-Python 3.11+ and Git are required.
+Python 3.11–3.14 and Git 2.45 or newer are required. The Git minimum makes object reads
+fail closed instead of lazily fetching missing partial-clone objects from a remote.
+
+### GitHub Release wheel
+
+Download the wheel and checksum manifest from the private GitHub Release, verify the wheel
+hash against `SHA256SUMS.txt`, then install it:
 
 ```powershell
-uv sync --extra dev
+gh release download v0.2.0 --repo taipei49314/unasked `
+  --pattern "unasked_research-0.2.0-py3-none-any.whl" `
+  --pattern "SHA256SUMS.txt"
+Get-FileHash -Algorithm SHA256 .\unasked_research-0.2.0-py3-none-any.whl
+Get-Content .\SHA256SUMS.txt
+uv tool install .\unasked_research-0.2.0-py3-none-any.whl
+unasked --json resources export --destination .unasked-kit
+unasked --json doctor
+```
+
+The exported kit contains the exact protocols, examples, custody guidance, constitution,
+threat model, and templates bound to the installed build. Changed destination files are not
+silently overwritten; repeat with `--force` only when replacement is intentional.
+
+### Source checkout
+
+```powershell
+uv sync --locked --extra dev
 uv tool install --editable .
+unasked --json resources export --destination .unasked-kit
 unasked --json doctor
 ```
 
@@ -36,20 +60,24 @@ records enforced network, secret, process, CPU, and disk isolation.
 `observe` also seals a repository-wide knowledge scan. Experiment plans contain exact,
 machine-evaluable assertions frozen before execution; an experiment reaches `SUPPORTED`
 only when those assertions deterministically classify its raw hashes/exit codes as
-`SUPPORTS`. Counterevidence requires four distinct CAS-backed challenge results rather than
-prose alone.
+`SUPPORTS`. The model cannot provide the reserved mutation command or invoke Git as an
+experiment command; UNASKED performs one internal, no-follow filesystem capture covering
+tracked, untracked, staged, and temporary Git-metadata mutations; root replacement and NTFS
+alternate streams fail closed. Counterevidence requires four distinct CAS-backed challenge
+results rather than prose alone.
 
 ## Command path
 
 ```powershell
 unasked --json doctor
 unasked --json init <repository> --commit <sha> --workspace <path> `
-  --protocol protocols/m0-development-v0.1.json `
+  --protocol .unasked-kit/protocols/m0-development-v0.1.json `
   --model-provider scripted --model-name development-model
 unasked --json observe --workspace <path> --run <run-id>
 unasked --json baselines run --workspace <path> --run <run-id>
 unasked --json investigate --workspace <path> --run <run-id> `
-  --budget examples/m0-budget.json --provider-config examples/provider-scripted.json
+  --budget .unasked-kit/examples/m0-budget.json `
+  --provider-config .unasked-kit/examples/provider-scripted.json
 unasked --json expectations add ...
 unasked --json candidates propose ...
 unasked --json experiments plan ...
@@ -70,9 +98,10 @@ unasked --json trials certify --report <aggregate-report.json>
 Use `unasked <command> --help` for required evidence fields. Commands never repair a target
 repository. All target writes occur only in temporary worktrees.
 
-Proposal, plan, challenge, and review JSON examples are in [`examples/`](examples/). Actor
-IDs are recorded but not authenticated in v0.1; organizational separation remains an
-external control.
+Proposal, plan, challenge, and review JSON examples are in [`examples/`](examples/) and in
+the exported resource kit. Actor IDs are recorded but not authenticated in the v0.1 evidence
+protocol implemented by software v0.2.0; organizational separation remains an external
+control.
 
 ### Fail-closed replay
 
@@ -83,7 +112,8 @@ isolated reproducer must first import all CAS artifacts with `artifacts add`, th
 `replay import` with independently produced replay and environment manifests.
 The imported environment must bind the target, frozen plan, executable set, independent
 command-result records, and a CAS-backed isolation receipt. The receipt issuer remains an
-external trust assumption in v0.1; it is not a cryptographic platform attestation.
+external trust assumption in the v0.1 evidence protocol; it is not a cryptographic platform
+attestation.
 
 `report --verified-only` does not trust a certificate merely because the file exists. It
 re-runs the frozen gate registry and verifies the verdict, complete CAS reference closure,
@@ -156,5 +186,9 @@ The repository-grounded security analysis is in
 
 ```powershell
 uv run ruff check .
+uv run ruff format --check .
 uv run pytest
+python scripts/verify_release.py
 ```
+
+See [`RELEASING.md`](RELEASING.md) for the tag-bound, reproducible GitHub Release process.

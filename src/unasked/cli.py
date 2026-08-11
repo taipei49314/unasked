@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -22,10 +21,12 @@ from unasked.errors import (
     UnaskedError,
     UsageError,
 )
+from unasked.executables import find_executable
 from unasked.explorer import BoundedExplorer, InvestigationMode
 from unasked.policy import Actor, Capability, State, require_capability
 from unasked.project import Project
 from unasked.providers import provider_from_config
+from unasked.resources import export_bundled_resources, list_bundled_resources
 from unasked.schemas import (
     SchemaNotFoundError,
     SchemaValidationError,
@@ -85,11 +86,17 @@ def _service(args: argparse.Namespace) -> InvestigationService:
 
 
 def _doctor(args: argparse.Namespace) -> dict[str, Any]:
-    git_path = shutil.which("git")
+    resolved_git = find_executable(
+        "git",
+        path=os.environ.get("PATH"),
+        excluded_roots=(Path.cwd().resolve(),),
+        windows_suffixes=(".exe",),
+    )
+    git_path = str(resolved_git) if resolved_git is not None else None
     git_version = None
     if git_path:
         completed = subprocess.run(
-            [git_path, "--version"],
+            [git_path, "--no-lazy-fetch", "--version"],
             check=False,
             capture_output=True,
             text=True,
@@ -109,7 +116,12 @@ def _doctor(args: argparse.Namespace) -> dict[str, Any]:
         "claim": CLAIM,
         "version": __version__,
         "python": sys.version.split()[0],
-        "git": {"available": git_path is not None, "path": git_path, "version": git_version},
+        "git": {
+            "available": git_path is not None,
+            "lazy_fetch_fail_closed": git_version is not None,
+            "path": git_path,
+            "version": git_version,
+        },
         "workspace": {
             "path": str(workspace),
             "initialized": initialized,
@@ -120,6 +132,16 @@ def _doctor(args: argparse.Namespace) -> dict[str, Any]:
         "network": {"required": False, "sandbox_enforcement": "external adapter required"},
         "m0_demonstrated": False,
     }
+
+
+def _resources_list(args: argparse.Namespace) -> dict[str, Any]:
+    del args
+    resources = list_bundled_resources()
+    return {"count": len(resources), "resources": list(resources)}
+
+
+def _resources_export(args: argparse.Namespace) -> dict[str, Any]:
+    return export_bundled_resources(args.destination, overwrite=args.force)
 
 
 def _init(args: argparse.Namespace) -> dict[str, Any]:
@@ -486,6 +508,21 @@ def _command_parser() -> Parser:
     )
     _add_workspace(doctor)
     doctor.set_defaults(handler=_doctor, command_name="doctor")
+
+    resources = commands.add_parser(
+        "resources", help="List or export the exact protocols and examples shipped in this build."
+    )
+    resource_commands = resources.add_subparsers(dest="resources_command", required=True)
+    resources_list = resource_commands.add_parser("list", help="List bundled resource hashes.")
+    resources_list.set_defaults(handler=_resources_list, command_name="resources list")
+    resources_export = resource_commands.add_parser(
+        "export", help="Export bundled resources to a local directory."
+    )
+    resources_export.add_argument("--destination", required=True)
+    resources_export.add_argument(
+        "--force", action="store_true", help="Replace changed destination files."
+    )
+    resources_export.set_defaults(handler=_resources_export, command_name="resources export")
 
     init = commands.add_parser("init", help="Bind a new run to an immutable Git commit.")
     init.add_argument("repository")

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "protocol_id": "UNASKED-M0-DEVELOPMENT-0.1",
   "protocol_version": "0.1.0-m0-development",
-  "charter_source_sha256": "3c5b6e607f460581c7a85ecdbb695a54681a8d34b5bc2418896c3ab9dd0b86a",
+  "charter_source_sha256": "3c5b6e607f460581c7a85ecddbb695a54681a8d34b5bc2418896c3ab9dd0b86a",
   "claim": "A research harness for blind, evidence-gated repository investigation.",
   "evaluation_status": "UNSEALED_DEVELOPMENT",
   "formal_m0_eligible": false,

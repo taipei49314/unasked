@@ -44,7 +44,13 @@ def _repository(tmp_path: Path) -> tuple[Path, str]:
     return repository, _git(repository, "rev-parse", "HEAD")
 
 
-def _prepared_candidate(tmp_path: Path) -> tuple[Project, InvestigationService, str, str, str]:
+def _prepared_candidate(
+    tmp_path: Path,
+    *,
+    capture_bytes: int = 0,
+    disk_bytes: int = 10_000_000,
+    expected_status: str = "SUCCEEDED",
+) -> tuple[Project, InvestigationService, str, str, str]:
     repository, commit = _repository(tmp_path)
     project = Project.create(tmp_path / "workspace")
     service = InvestigationService(project)
@@ -93,7 +99,17 @@ def _prepared_candidate(tmp_path: Path) -> tuple[Project, InvestigationService, 
         commands=[
             {
                 "command_id": "CMD-PROBE",
-                "argv": [sys.executable, "-c", "print('actual')"],
+                "argv": [
+                    sys.executable,
+                    "-c",
+                    (
+                        "from pathlib import Path; "
+                        f"Path('capture.bin').write_bytes(b'x' * {capture_bytes}); "
+                        "print('actual')"
+                        if capture_bytes
+                        else "print('actual')"
+                    ),
+                ],
                 "working_directory": ".",
                 "purpose": "Probe one deterministic observable behavior.",
                 "expected_observation": "stdout is exactly actual followed by newline.",
@@ -122,7 +138,7 @@ def _prepared_candidate(tmp_path: Path) -> tuple[Project, InvestigationService, 
         ],
         wall_seconds=10,
         cpu_seconds=10,
-        disk_bytes=10_000_000,
+        disk_bytes=disk_bytes,
         processes=4,
     )
     result = service.execute_experiment(
@@ -131,7 +147,7 @@ def _prepared_candidate(tmp_path: Path) -> tuple[Project, InvestigationService, 
         actor=Actor("executor-1", "sandbox_executor"),
         allowed_executables=[sys.executable],
     )
-    assert result["status"] == "SUCCEEDED"
+    assert result["status"] == expected_status
     assert result["observed_outcome"] == "SUPPORTS"
     project.transition_candidate(
         run_id,
@@ -248,6 +264,20 @@ def test_local_replay_is_reproduced_but_not_authorized(tmp_path: Path) -> None:
         allowed_executables=[sys.executable],
     )
     assert replay["status"] == "PASS"
+    replay_environment = read_json(
+        project.candidate_dir(run_id, candidate_id) / "replay" / "environment.json"
+    )
+    assert replay_environment["input_manifest"]["allowed_executables"] == [sys.executable]
+    assert replay_environment["input_manifest"]["system_commands"] == [
+        {
+            "command_id": "CMD-CAPTURE-DIFF",
+            "argv": [
+                "unasked-internal",
+                "capture-worktree-mutations",
+                "--format=canonical-json",
+            ],
+        }
+    ]
     assert project.current_state(run_id, candidate_id) is State.REPRODUCED
 
     authority = Actor("judge-2", "human_judge")
@@ -259,6 +289,46 @@ def test_local_replay_is_reproduced_but_not_authorized(tmp_path: Path) -> None:
     assert project.current_state(run_id, candidate_id) is State.REPRODUCED
 
 
+def test_matching_incomplete_captures_never_pass_replay(tmp_path: Path) -> None:
+    project, service, run_id, candidate_id, _ = _prepared_candidate(
+        tmp_path,
+        capture_bytes=2,
+        disk_bytes=1,
+        expected_status="FAILED",
+    )
+
+    replay = service.replay(
+        run_id,
+        candidate_id,
+        actor=Actor("reproducer-1", "independent_reproducer"),
+        allowed_executables=[sys.executable],
+    )
+
+    assert replay["status"] == "FAIL"
+    assert replay["core_result_match"] is False
+    assert replay["clean_environment"] is False
+    assert replay["residual_state_detected"] is True
+    assert replay["independence_attestation"]["no_explorer_state"] is False
+    assert replay["independence_attestation"]["no_unrecorded_files"] is False
+    assert project.current_state(run_id, candidate_id) is State.SUPPORTED
+
+
+def test_authority_requires_a_succeeded_experiment(tmp_path: Path) -> None:
+    project, _, run_id, candidate_id, _ = _prepared_candidate(tmp_path)
+    result_path = project.candidate_dir(run_id, candidate_id) / "experiment" / "result.json"
+    result = read_json(result_path)
+    result["status"] = "FAILED"
+    result_path.write_bytes(canonical_json(result) + b"\n")
+
+    report = AuthorityKernel(project).evaluate(
+        run_id,
+        candidate_id,
+        authority=Actor("judge-2", "human_judge"),
+    )
+
+    assert report.detailed_checks["experiment_complete"] is False
+
+
 def test_external_evidence_can_authorize_a_structurally_complete_certificate(
     tmp_path: Path,
     capsys,
@@ -268,7 +338,6 @@ def test_external_evidence_can_authorize_a_structurally_complete_certificate(
     experiment = read_json(
         project.candidate_dir(run_id, candidate_id) / "experiment" / "result.json"
     )
-    plan = read_json(project.candidate_dir(run_id, candidate_id) / "experiment" / "plan.json")
     replay_commands = [
         service.store.put_bytes(
             canonical_json(execution),
@@ -292,13 +361,9 @@ def test_external_evidence_can_authorize_a_structurally_complete_certificate(
         media_type="application/json",
         original_name="external-isolation-receipt.json",
     )
-    input_manifest = {
-        "target_snapshot_hash": project.get_target(run_id)["snapshot_hash"],
-        "plan_hash": hash_json(plan),
-        "allowed_executables": sorted(
-            {command["argv"][0] for command in plan["commands"]} | {"git"}
-        ),
-    }
+    input_manifest = read_json(
+        project.candidate_dir(run_id, candidate_id) / "experiment" / "environment.json"
+    )["input_manifest"]
     reproducer = Actor("reproducer-1", "independent_reproducer")
     replay_result = {
         "schema_version": "0.1.0",

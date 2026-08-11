@@ -54,3 +54,17 @@ def test_missing_json_input_has_a_not_found_error(tmp_path: Path, capsys) -> Non
     assert exit_code == 5
     assert payload["error"]["code"] == "NOT_FOUND"
     assert payload["command"] == "schemas validate"
+
+
+def test_resources_export_provides_a_wheel_safe_kit(tmp_path: Path, capsys) -> None:
+    destination = tmp_path / "resource-kit"
+
+    exit_code = main(["--json", "resources", "export", "--destination", str(destination)])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload["ok"] is True
+    assert payload["command"] == "resources export"
+    assert payload["data"]["resource_count"] > 0
+    assert (destination / "protocols" / "m0-development-v0.1.json").is_file()
+    assert (destination / "examples" / "m0-budget.json").is_file()

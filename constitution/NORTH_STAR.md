@@ -5,7 +5,7 @@
 This file is the implementation-facing constitutional extract of
 `UNASKED_NORTH_STAR_v0.1.md`. The supplied source charter is bound by SHA-256:
 
-`3c5b6e607f460581c7a85ecdbb695a54681a8d34b5bc2418896c3ab9dd0b86a`
+`3c5b6e607f460581c7a85ecddbb695a54681a8d34b5bc2418896c3ab9dd0b86a`
 
 Changing this document or any policy derived from it creates a new protocol version. A
 running investigation remains bound to the earlier bytes and hash.

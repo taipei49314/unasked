@@ -31,10 +31,10 @@
     "started_at": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/timestamp" },
     "completed_at": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/timestamp" },
     "status": { "enum": ["PASS", "FAIL", "INCONCLUSIVE"] },
-    "clean_environment": { "const": true },
+    "clean_environment": { "type": "boolean" },
     "environment_hash": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" },
     "core_result_match": { "type": "boolean" },
-    "residual_state_detected": { "const": false },
+    "residual_state_detected": { "type": "boolean" },
     "command_result_refs": {
       "type": "array",
       "minItems": 1,
@@ -62,8 +62,8 @@
       "additionalProperties": false,
       "required": ["no_explorer_state", "no_unrecorded_files", "input_manifest_hash"],
       "properties": {
-        "no_explorer_state": { "const": true },
-        "no_unrecorded_files": { "const": true },
+        "no_explorer_state": { "type": "boolean" },
+        "no_unrecorded_files": { "type": "boolean" },
         "input_manifest_hash": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" }
       }
     }
@@ -75,7 +75,17 @@
         "required": ["status"]
       },
       "then": {
-        "properties": { "core_result_match": { "const": true } }
+        "properties": {
+          "clean_environment": { "const": true },
+          "core_result_match": { "const": true },
+          "residual_state_detected": { "const": false },
+          "independence_attestation": {
+            "properties": {
+              "no_explorer_state": { "const": true },
+              "no_unrecorded_files": { "const": true }
+            }
+          }
+        }
       }
     }
   ]

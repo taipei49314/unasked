@@ -4,7 +4,6 @@ import copy
 import json
 import math
 import os
-import shutil
 import subprocess
 import threading
 from dataclasses import dataclass
@@ -12,6 +11,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from unasked.errors import ExecutionError, IntegrityError, NotFoundError, UsageError
+from unasked.executables import find_executable, validate_absolute_executable
 from unasked.util import canonical_json, hash_json, sha256_bytes, sha256_file
 
 
@@ -136,6 +136,7 @@ class JsonSubprocessProvider:
         model_name: str,
         timeout_seconds: int = 60,
         bound_files: list[str | Path] | None = None,
+        executable_search_excluded_roots: list[str | Path] | None = None,
     ) -> None:
         if (
             not isinstance(argv, list)
@@ -151,15 +152,25 @@ class JsonSubprocessProvider:
             or timeout_seconds < 1
         ):
             raise UsageError("Provider timeout_seconds must be a positive integer.")
-        executable = shutil.which(argv[0])
-        if executable is None:
-            candidate = Path(argv[0]).expanduser()
-            if candidate.is_file():
-                executable = str(candidate.resolve())
-        if executable is None:
+        candidate = Path(argv[0]).expanduser()
+        if candidate.is_absolute():
+            resolved_executable = validate_absolute_executable(candidate)
+        elif "/" in argv[0] or "\\" in argv[0]:
+            resolved_executable = None
+        else:
+            resolved_executable = find_executable(
+                argv[0],
+                path=os.environ.get("PATH"),
+                excluded_roots=(
+                    Path.cwd(),
+                    *(executable_search_excluded_roots or []),
+                ),
+            )
+        if resolved_executable is None:
             raise NotFoundError(
                 "Provider executable was not found.", details={"executable": argv[0]}
             )
+        executable = str(resolved_executable)
         self.argv = [executable, *argv[1:]]
         self.timeout_seconds = timeout_seconds
         executable_path = Path(executable)
@@ -378,6 +389,7 @@ def provider_from_config(config: dict[str, Any], *, base: Path | None = None) ->
             model_name=model,
             timeout_seconds=config.get("timeout_seconds", 60),
             bound_files=bound_files,
+            executable_search_excluded_roots=[base] if base is not None else None,
         )
     raise UsageError(
         "Provider kind must select exactly one supported provider.",

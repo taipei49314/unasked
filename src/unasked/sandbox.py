@@ -10,7 +10,6 @@ from __future__ import annotations
 import math
 import os
 import re
-import shutil
 import subprocess
 import time
 from collections.abc import Collection, Mapping
@@ -18,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from unasked.errors import ExecutionError, NotFoundError, PolicyError, UsageError
+from unasked.executables import find_executable
 from unasked.util import ensure_within
 
 ISOLATION_MODE = "local_restricted"
@@ -168,7 +168,11 @@ class RestrictedExecutor:
             directly_allowed = resolved in self._allowed_paths
             trusted_name_match = False
             if normalized_name in self._allowed_names:
-                discovered = shutil.which(resolved.name, path=environment.get("PATH"))
+                discovered = find_executable(
+                    resolved.name,
+                    path=environment.get("PATH"),
+                    excluded_roots=(self.worktree,),
+                )
                 trusted_name_match = (
                     discovered is not None and Path(discovered).resolve() == resolved
                 )
@@ -181,7 +185,11 @@ class RestrictedExecutor:
                 raise PolicyError(
                     "Executable is not allowlisted.", details={"executable": executable}
                 )
-            discovered = shutil.which(executable, path=environment.get("PATH"))
+            discovered = find_executable(
+                executable,
+                path=environment.get("PATH"),
+                excluded_roots=(self.worktree,),
+            )
             if discovered is None:
                 raise NotFoundError(
                     "Allowed executable was not found.", details={"executable": executable}
@@ -198,6 +206,17 @@ class RestrictedExecutor:
                 "Allowed executable is not a file.", details={"executable": str(resolved)}
             )
         return resolved
+
+    def resolve_executable(self, executable: str) -> Path:
+        """Resolve one allowlisted executable through the executor's launch policy.
+
+        Callers that enforce an executable-identity policy can inspect this path
+        immediately before execution.  The command is still resolved again by
+        :meth:`execute`, so this method does not weaken the allowlist.
+        """
+
+        environment, _ = self._environment(None)
+        return self._resolve_executable(executable, environment)
 
     def _cwd(self, cwd: str | os.PathLike[str] | None) -> Path:
         if cwd is None:

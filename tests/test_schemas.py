@@ -758,6 +758,32 @@ def test_verified_verdict_cannot_bypass_required_gates() -> None:
     )
 
 
+def test_replay_schema_allows_failed_capture_attestations_but_not_passing_ones() -> None:
+    failed = deepcopy(valid_examples()["replay-result"])
+    failed.update(
+        {
+            "status": "FAIL",
+            "clean_environment": False,
+            "core_result_match": False,
+            "residual_state_detected": True,
+        }
+    )
+    failed["independence_attestation"]["no_explorer_state"] = False
+    failed["independence_attestation"]["no_unrecorded_files"] = False
+    assert validate_schema("replay-result", failed) == ()
+
+    passing = deepcopy(failed)
+    passing["status"] = "PASS"
+    issues = validate_schema("replay-result", passing)
+    assert {issue.path for issue in issues if issue.code == "const"} >= {
+        "/clean_environment",
+        "/core_result_match",
+        "/residual_state_detected",
+        "/independence_attestation/no_explorer_state",
+        "/independence_attestation/no_unrecorded_files",
+    }
+
+
 def test_investigation_result_accepts_persisted_and_enriched_return_shapes() -> None:
     persisted = deepcopy(valid_examples()["investigation-result"])
     assert validate_schema("investigation-result", persisted) == ()

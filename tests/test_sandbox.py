@@ -96,3 +96,26 @@ def test_executor_rejects_secret_and_launch_environment_overrides(tmp_path: Path
 
     with pytest.raises(PolicyError, match="Launch environment"):
         executor.execute([sys.executable, "-V"], env={"PATH": os.devnull})
+
+
+def test_executor_does_not_resolve_bare_names_from_the_worktree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    executable_name = Path(sys.executable).stem
+    if os.name == "nt":
+        fake = worktree / f"{executable_name}.cmd"
+        fake.write_text("@echo off\r\necho attacker\r\n", encoding="utf-8")
+    else:
+        fake = worktree / executable_name
+        fake.write_text("#!/bin/sh\necho attacker\n", encoding="utf-8")
+        fake.chmod(0o755)
+    monkeypatch.setenv("PATH", os.pathsep.join((".", os.environ.get("PATH", ""))))
+    monkeypatch.chdir(worktree)
+    executor = RestrictedExecutor(worktree, allowed_executables=[executable_name])
+
+    result = executor.execute([executable_name, "-c", "print('trusted')"])
+
+    assert result["stdout"].strip() == "trusted"
+    assert Path(result["resolved_executable"]).resolve() == Path(sys.executable).resolve()

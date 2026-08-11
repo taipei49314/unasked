@@ -38,7 +38,7 @@ AUTHORIZATION_GATES = (
 DEFAULT_PROTOCOL: dict[str, Any] = {
     "protocol_id": "UNASKED-P0-0.1",
     "protocol_version": PROTOCOL_VERSION,
-    "charter_source_sha256": ("3c5b6e607f460581c7a85ecdbb695a54681a8d34b5bc2418896c3ab9dd0b86a"),
+    "charter_source_sha256": ("3c5b6e607f460581c7a85ecddbb695a54681a8d34b5bc2418896c3ab9dd0b86a"),
     "claim": CLAIM,
     "high_level_prompt": (
         "Investigate this repository for material discrepancies. "

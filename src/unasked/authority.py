@@ -21,6 +21,7 @@ from unasked.protocol import AUTHORIZATION_GATES
 from unasked.records import read_jsonl
 from unasked.schemas import validate_or_raise
 from unasked.util import canonical_json, hash_json, read_json, sha256_file, utc_now
+from unasked.workflow import capture_executions_complete
 
 
 @dataclass(frozen=True)
@@ -244,8 +245,12 @@ class AuthorityKernel:
             plan is not None
             and experiment is not None
             and experiment_environment is not None
-            and experiment.get("status") not in {"DENIED", "TIMED_OUT", "INCONCLUSIVE"}
-            and bool(experiment.get("executions"))
+            and experiment.get("status") == "SUCCEEDED"
+            and capture_executions_complete(
+                experiment.get("executions"),
+                store=self.store,
+                artifact_byte_limit=plan.get("isolation", {}).get("limits", {}).get("disk_bytes"),
+            )
             and experiment.get("observed_outcome") == "SUPPORTS"
             and classify_outcome(
                 plan.get("outcome_assertions", []), experiment.get("executions", [])
@@ -341,14 +346,8 @@ class AuthorityKernel:
             and bool(replay_environment)
             and replay.get("environment_hash") == hash_json(replay_environment)
         )
-        expected_replay_input = {
-            "target_snapshot_hash": target["snapshot_hash"],
-            "plan_hash": hash_json(plan) if plan is not None else "",
-            "allowed_executables": sorted(
-                {command["argv"][0] for command in (plan or {}).get("commands", [])} | {"git"}
-            ),
-        }
-        replay_input_bound = all(
+        expected_replay_input = (experiment_environment or {}).get("input_manifest")
+        replay_input_bound = isinstance(expected_replay_input, dict) and all(
             (
                 replay_environment.get("input_manifest") == expected_replay_input,
                 replay.get("independence_attestation", {}).get("input_manifest_hash")
