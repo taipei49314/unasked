@@ -4,9 +4,22 @@ on:
   push:
     tags:
       - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing annotated release tag to verify and publish
+        required: true
+        type: string
 
 permissions:
   contents: read
+
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
 
 jobs:
   verify:
@@ -21,13 +34,21 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+          ref: ${{ inputs.tag || github.ref }}
       - name: Bind the annotated tag, commit, and main history
         id: binding
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          test "$(git cat-file -t "refs/tags/$GITHUB_REF_NAME")" = tag
-          tag_object="$(git rev-parse "refs/tags/$GITHUB_REF_NAME")"
-          tag_commit="$(git rev-parse "refs/tags/$GITHUB_REF_NAME^{}")"
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          tag_ref="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG")"
+          test "$(jq -r '.object.type' <<<"$tag_ref")" = tag
+          tag_object="$(jq -r '.object.sha' <<<"$tag_ref")"
+          tag_record="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$tag_object")"
+          test "$(jq -r '.tag' <<<"$tag_record")" = "$RELEASE_TAG"
+          test "$(jq -r '.object.type' <<<"$tag_record")" = commit
+          tag_commit="$(jq -r '.object.sha' <<<"$tag_record")"
           test "$tag_commit" = "$(git rev-parse HEAD)"
           git show-ref --verify --quiet refs/remotes/origin/main
           git merge-base --is-ancestor "$tag_commit" refs/remotes/origin/main
@@ -44,8 +65,8 @@ jobs:
           version: "0.12.2"
       - name: Verify the tag and release notes
         run: |
-          python scripts/verify_release.py --tag "$GITHUB_REF_NAME"
-          test -f ".github/releases/${GITHUB_REF_NAME#v}.md"
+          python scripts/verify_release.py --tag "$RELEASE_TAG"
+          test -f ".github/releases/${RELEASE_TAG#v}.md"
       - name: Verify the tagged source
         run: |
           uv lock --check
@@ -61,7 +82,7 @@ jobs:
       - name: Verify and checksum distributions
         run: >-
           python scripts/verify_release.py
-          --tag "$GITHUB_REF_NAME"
+          --tag "$RELEASE_TAG"
           --dist dist/one
           --compare-dist dist/two
           --write-checksums
@@ -95,6 +116,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+          ref: ${{ inputs.tag || github.ref }}
       - name: Download the verified artifacts
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
@@ -105,44 +127,54 @@ jobs:
           EXPECTED_TAG_COMMIT: ${{ needs.verify.outputs.tag_commit }}
           EXPECTED_TAG_OBJECT: ${{ needs.verify.outputs.tag_object }}
         run: |
-          test "$(git cat-file -t "refs/tags/$GITHUB_REF_NAME")" = tag
-          test "$(git rev-parse "refs/tags/$GITHUB_REF_NAME")" = "$EXPECTED_TAG_OBJECT"
-          test "$(git rev-parse "refs/tags/$GITHUB_REF_NAME^{}")" = "$EXPECTED_TAG_COMMIT"
           test "$(git rev-parse HEAD)" = "$EXPECTED_TAG_COMMIT"
+          git show-ref --verify --quiet refs/remotes/origin/main
+          git merge-base --is-ancestor "$EXPECTED_TAG_COMMIT" refs/remotes/origin/main
           (cd dist/one && sha256sum --check SHA256SUMS.txt)
-          python scripts/verify_release.py --tag "$GITHUB_REF_NAME" --dist dist/one
+          python scripts/verify_release.py --tag "$RELEASE_TAG" --dist dist/one
       - name: Create a verified draft and publish only after asset checks
         env:
+          EXPECTED_TAG_COMMIT: ${{ needs.verify.outputs.tag_commit }}
           EXPECTED_TAG_OBJECT: ${{ needs.verify.outputs.tag_object }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          remote_tag_object="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$GITHUB_REF_NAME" --jq .object.sha)"
-          test "$remote_tag_object" = "$EXPECTED_TAG_OBJECT"
+          require_release_binding() {
+            main_status="$(gh api "repos/$GITHUB_REPOSITORY/compare/$EXPECTED_TAG_COMMIT...main" --jq .status)"
+            test "$main_status" = identical || test "$main_status" = ahead
+            remote_tag_object="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq .object.sha)"
+            test "$remote_tag_object" = "$EXPECTED_TAG_OBJECT"
+          }
+          require_release_binding
           created_draft=0
           cleanup_draft() {
             if test "$created_draft" = 1; then
-              gh release delete "$GITHUB_REF_NAME" --yes || true
+              gh release delete "$RELEASE_TAG" --yes || true
             fi
           }
           trap cleanup_draft ERR
-          gh release create "$GITHUB_REF_NAME" \
-            dist/one/*.whl \
-            dist/one/*.tar.gz \
-            dist/one/SHA256SUMS.txt \
+          if existing_release_state="$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft 2>/dev/null)"; then
+            test "$existing_release_state" = true
+            gh release delete "$RELEASE_TAG" --yes
+          fi
+          require_release_binding
+          gh release create "$RELEASE_TAG" \
             --verify-tag \
             --draft \
-            --title "UNASKED $GITHUB_REF_NAME - Non-certifying M0 development path" \
-            --notes-file ".github/releases/${GITHUB_REF_NAME#v}.md"
+            --title "UNASKED $RELEASE_TAG - Non-certifying M0 development path" \
+            --notes-file ".github/releases/${RELEASE_TAG#v}.md"
           created_draft=1
-          test "$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets | length')" = 3
+          gh release upload "$RELEASE_TAG" \
+            dist/one/*.whl \
+            dist/one/*.tar.gz \
+            dist/one/SHA256SUMS.txt
+          test "$(gh release view "$RELEASE_TAG" --json assets --jq '.assets | length')" = 3
           for file in dist/one/*.whl dist/one/*.tar.gz dist/one/SHA256SUMS.txt; do
             name="$(basename "$file")"
             local_size="$(stat --format=%s "$file")"
-            remote_size="$(gh release view "$GITHUB_REF_NAME" --json assets --jq ".assets[] | select(.name == \"$name\") | .size")"
+            remote_size="$(gh release view "$RELEASE_TAG" --json assets --jq ".assets[] | select(.name == \"$name\") | .size")"
             test "$remote_size" = "$local_size"
           done
-          remote_tag_object="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$GITHUB_REF_NAME" --jq .object.sha)"
-          test "$remote_tag_object" = "$EXPECTED_TAG_OBJECT"
-          gh release edit "$GITHUB_REF_NAME" --draft=false --latest
+          require_release_binding
+          gh release edit "$RELEASE_TAG" --draft=false --latest
           created_draft=0
           trap - ERR
