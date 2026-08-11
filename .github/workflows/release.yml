@@ -42,6 +42,7 @@ jobs:
           test "$(jq -r '.object.type' <<<"$tag_ref")" = tag
           tag_object="$(jq -r '.object.sha' <<<"$tag_ref")"
           tag_record="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$tag_object")"
+          test "$(jq -r '.tag' <<<"$tag_record")" = "$RELEASE_TAG"
           test "$(jq -r '.object.type' <<<"$tag_record")" = commit
           tag_commit="$(jq -r '.object.sha' <<<"$tag_record")"
           test "$tag_commit" = "$(git rev-parse HEAD)"
@@ -123,13 +124,21 @@ jobs:
           EXPECTED_TAG_OBJECT: ${{ needs.verify.outputs.tag_object }}
         run: |
           test "$(git rev-parse HEAD)" = "$EXPECTED_TAG_COMMIT"
+          git show-ref --verify --quiet refs/remotes/origin/main
+          git merge-base --is-ancestor "$EXPECTED_TAG_COMMIT" refs/remotes/origin/main
           (cd dist/one && sha256sum --check SHA256SUMS.txt)
           python scripts/verify_release.py --tag "$RELEASE_TAG" --dist dist/one
       - name: Create a verified draft and publish only after asset checks
         env:
+          EXPECTED_TAG_COMMIT: ${{ needs.verify.outputs.tag_commit }}
           EXPECTED_TAG_OBJECT: ${{ needs.verify.outputs.tag_object }}
           GH_TOKEN: ${{ github.token }}
         run: |
+          require_tag_on_main() {
+            main_status="$(gh api "repos/$GITHUB_REPOSITORY/compare/$EXPECTED_TAG_COMMIT...main" --jq .status)"
+            test "$main_status" = identical || test "$main_status" = ahead
+          }
+          require_tag_on_main
           remote_tag_object="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq .object.sha)"
           test "$remote_tag_object" = "$EXPECTED_TAG_OBJECT"
           created_draft=0
@@ -157,6 +166,7 @@ jobs:
           done
           remote_tag_object="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq .object.sha)"
           test "$remote_tag_object" = "$EXPECTED_TAG_OBJECT"
+          require_tag_on_main
           gh release edit "$RELEASE_TAG" --draft=false --latest
           created_draft=0
           trap - ERR
