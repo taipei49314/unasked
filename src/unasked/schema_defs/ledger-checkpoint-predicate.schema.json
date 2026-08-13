@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://schemas.unasked.dev/attestations/ledger-checkpoint/v0.4",
+  "title": "UNASKED ledger checkpoint predicate", "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "predicate_id", "issued_at", "issuer_actor_id", "trust_policy_sha256", "suite_id", "case_id", "variant", "run_id", "entry_count", "head_event_hash", "ledger_sha256", "target_snapshot_hash", "protocol_hash", "checkpointed_at"],
+  "properties": {
+    "schema_version": {"const": "0.4.0"}, "predicate_id": {"$ref": "#/$defs/id"}, "issued_at": {"$ref": "#/$defs/time"}, "issuer_actor_id": {"$ref": "#/$defs/id"}, "trust_policy_sha256": {"$ref": "#/$defs/hash"},
+    "suite_id": {"$ref": "#/$defs/id"}, "case_id": {"$ref": "#/$defs/id"}, "variant": {"$ref": "#/$defs/variant"}, "run_id": {"$ref": "#/$defs/id"}, "entry_count": {"type": "integer", "minimum": 1}, "head_event_hash": {"$ref": "#/$defs/hash"}, "ledger_sha256": {"$ref": "#/$defs/hash"}, "target_snapshot_hash": {"$ref": "#/$defs/hash"}, "protocol_hash": {"$ref": "#/$defs/hash"}, "checkpointed_at": {"$ref": "#/$defs/time"}
+  },
+  "$defs": {"id": {"$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier"}, "hash": {"$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256"}, "time": {"$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/timestamp"}, "variant": {"enum": ["deterministic-detectors-only", "read-only-llm-reviewer", "llm-tools-no-experiment-gate", "experiment-loop-without-falsifier", "full-evidence-gated-system"]}}
+}

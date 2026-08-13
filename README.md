@@ -10,11 +10,12 @@ counterevidence, clean replay, and independent verdict authorization. Its centra
 that model output is never evidence and a proposer can never promote its own result to
 `VERIFIED`.
 
-This repository includes the P0 authority foundation and an **unsealed M0 development
-execution path**: a bounded single-provider Explorer, deterministic baselines, the five
-required ablation arms, and aggregate trial metrics. It does **not** claim to find unknown
-bugs or to have passed an independently sealed M0 evaluation. `NO_VERIFIED_DISCOVERY` is a
-valid and expected result.
+Version 0.4 adds an authenticated trust plane for externally supplied DSSE/in-toto
+attestations, externally witnessed ledger checkpoints, two-phase authority commits, and
+evidence-complete M0 certification verification. The repository still ships no independently
+sealed benchmark run and no production trust policy. It does **not** claim to find unknown
+bugs or to have demonstrated M0. `NO_VERIFIED_DISCOVERY` and `M0_NOT_DEMONSTRATED` are valid
+and expected results.
 
 ## Install
 
@@ -28,7 +29,7 @@ hash against `SHA256SUMS.txt`, then install it. The following PowerShell example
 published checksum and downloaded wheel differ:
 
 ```powershell
-$version = "0.3.0"
+$version = "0.4.0"
 $wheel = "unasked_research-$version-py3-none-any.whl"
 $release = "https://github.com/taipei49314/unasked/releases/download/v$version"
 Invoke-WebRequest "$release/$wheel" -OutFile $wheel
@@ -110,6 +111,24 @@ unasked --json trials evaluate --manifest <private-manifest.json> --results <res
 unasked --json trials audit --report <aggregate-report.json> `
   --evidence-index <trial-evidence-index.json>
 unasked --json trials certify --report <aggregate-report.json>
+# Verify DSSE transport and a strict predicate without granting subject authority:
+unasked --json attestations verify `
+  --envelope <attestation.dsse.json> `
+  --predicate-type https://schemas.unasked.dev/attestations/custody/v0.4 `
+  --trust-policy <trust-policy.json> `
+  --trust-policy-sha256 <sha256-of-exact-policy-bytes>
+# Full authenticated M0 verification requires all nine externally produced inputs:
+unasked --json trials certify `
+  --certification-envelope <m0-certification.dsse.json> `
+  --trial-evaluation-envelope <trial-evaluation.dsse.json> `
+  --trust-policy <trust-policy.json> `
+  --trust-policy-sha256 <sha256-of-exact-policy-bytes> `
+  --manifest <sealed-manifest.json> `
+  --custody-envelope <custody.dsse.json> `
+  --report <aggregate-report.json> `
+  --evidence-index <trial-evidence-index.json> `
+  --audit <trial-evidence-audit.json> `
+  --run-matrix <trial-run-matrix.json>
 ```
 
 Use `unasked <command> --help` for required evidence fields. Commands never repair a target
@@ -130,15 +149,18 @@ The authority kernel therefore refuses `VERIFIED` even when local replay passes.
 isolated reproducer must first import all CAS artifacts with `artifacts add`, then use
 `replay import` with independently produced replay and environment manifests.
 The imported environment must bind the target, frozen plan, executable set, independent
-command-result records, and a CAS-backed isolation receipt whose structured subject must bind
-the replay inputs and outputs. Because v0.3.0 has no independently configured signature trust
-root, the authority kernel deliberately treats every imported receipt as unauthenticated:
-the evidence may be retained and reach `REPRODUCED`, but it cannot authorize `VERIFIED`.
+command-result records, and a CAS-backed isolation receipt whose structured subject binds the
+replay inputs and outputs. Version 0.4 can consume externally configured Ed25519 trust policy,
+DSSE/in-toto attestations, and witnessed checkpoints through the Python authority API. Legacy
+declarations remain unauthenticated; the CLI `verify` command without a complete v0.4 bundle
+fails closed and cannot authorize `VERIFIED`.
 
-`report --verified-only` does not trust a certificate merely because the file exists. It
-re-runs the frozen gate registry and verifies the verdict, complete CAS reference closure,
-run/candidate identities, snapshot/protocol bindings, state history, and adjacent issuance
-events before returning any certificate.
+`report --verified-only` does not accept the exact v0.4 external inputs needed to authenticate
+a certificate. It therefore returns `NO_VERIFIED_DISCOVERY` instead of trusting legacy files
+or silently publishing a partially checked claim. Authenticated publication currently
+requires an external caller to invoke `AuthorityKernel.audit_certificate_v2` with the exact
+policy, custody, isolation, authority, and checkpoint bytes; a future report surface may
+expose that same complete-input contract.
 
 ### M0 development execution
 
@@ -169,14 +191,33 @@ The three trial commands have deliberately different authority:
   a readable `PASS` or `FAIL` structural matrix, but all authorization checks remain false and
   the output is always `NON_CERTIFYING` with `m0_demonstrated=false`. Workspaces must be safe
   relative paths resolved beneath the evidence-index directory.
-- `trials certify` still recomputes and then denies. Version 0.3 has no authenticated actor or
-  custody identities, external attestation trust root, or external ledger checkpoint, so a
-  structural audit can never unlock certification.
+- legacy `trials certify --report` returns the exact negative result
+  `M0_NOT_DEMONSTRATED`. The v0.4 form accepts nine externally supplied files plus an
+  exact-byte trust-policy SHA-256 pin. It independently authenticates custody, isolation,
+  final ledger checkpoints, every authorization graph, the complete 5-by-7 run matrix,
+  evaluation, and certification. A SHADOW policy can exercise this path but can never
+  demonstrate M0.
 
-Input booleans are metrics, not authority. UNASKED never
-synthesizes a custody attestation. A future formal M0 run still needs evidence sealed by an
-independent custodian before Explorer development, 3/5 positive cases, zero false `VERIFIED`
-controls, complete context provenance, and 100% clean replay.
+Input booleans are metrics, not authority. UNASKED never synthesizes a custody attestation or
+signs with private keys. A formal M0 result requires an externally operated PRODUCTION trust
+policy, a suite sealed by an independent custodian before Explorer development, 3/5 positive
+cases, zero false `VERIFIED` controls, complete context provenance, 100% clean replay, all
+35 isolated runs, and authenticated final checkpoints. None of those real-world facts is
+established merely by publishing this software.
+
+The public [`examples/trust-policy-shadow.json`](examples/trust-policy-shadow.json) contains
+only disposable public keys and has mode `SHADOW`; its exact current SHA-256 is
+`e020ca2e58d24c66dc45cae8a641c4bb9a635df9aa1aea484c6360cfc18f641f`. No corresponding
+private keys are shipped. Never replace the mode string or reuse these keys as a production
+trust root. Authority v2 signing-request preparation, commit, and external re-audit are
+currently Python APIs (`AuthorityKernel.build_authorization_request`,
+`prepare_authorization`, `commit_authorization`, and `audit_certificate_v2`), not a signing
+CLI and not a key-management service.
+
+CLI exit behavior is stable: a complete negative certification is success (`0`); malformed,
+schema-invalid, incomplete, or unsafe-path input is usage failure (`2`); policy refusal is
+`3`; and exact-byte/hash/ledger/signature tampering is integrity failure (`4`). A complete
+provided bundle is never silently downgraded after tampering.
 
 ## JSON contract
 

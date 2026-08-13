@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.unasked.dev/v0.4/trial-run-matrix.schema.json",
+  "title": "UNASKED authenticated M0 trial run matrix",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "suite_id", "manifest_sha256", "protocol_hash", "entries", "matrix_sha256"],
+  "properties": {
+    "schema_version": {"const": "0.4.0"},
+    "suite_id": {"$ref": "#/$defs/id"},
+    "manifest_sha256": {"$ref": "#/$defs/hash"},
+    "protocol_hash": {"$ref": "#/$defs/hash"},
+    "entries": {
+      "type": "array",
+      "minItems": 35,
+      "maxItems": 35,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/entry"}
+    },
+    "matrix_sha256": {"$ref": "#/$defs/hash"}
+  },
+  "$defs": {
+    "id": {"$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier"},
+    "hash": {"$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256"},
+    "variant": {"enum": ["deterministic-detectors-only", "read-only-llm-reviewer", "llm-tools-no-experiment-gate", "experiment-loop-without-falsifier", "full-evidence-gated-system"]},
+    "locator": {"type": "string", "minLength": 1},
+    "fileReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": {"$ref": "#/$defs/locator"},
+        "sha256": {"$ref": "#/$defs/hash"}
+      }
+    },
+    "certificateBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidate_id", "authority_envelope", "c_pre_checkpoint_envelope"],
+      "properties": {
+        "candidate_id": {"$ref": "#/$defs/id"},
+        "authority_envelope": {"$ref": "#/$defs/fileReference"},
+        "c_pre_checkpoint_envelope": {"$ref": "#/$defs/fileReference"}
+      }
+    },
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["variant", "case_id", "run_id", "workspace", "result", "ledger", "isolation_envelope", "final_checkpoint_envelope", "certificate_bindings"],
+      "properties": {
+        "variant": {"$ref": "#/$defs/variant"},
+        "case_id": {"$ref": "#/$defs/id"},
+        "run_id": {"$ref": "#/$defs/id"},
+        "workspace": {"$ref": "#/$defs/locator"},
+        "result": {"$ref": "#/$defs/fileReference"},
+        "ledger": {"$ref": "#/$defs/fileReference"},
+        "isolation_envelope": {"$ref": "#/$defs/fileReference"},
+        "final_checkpoint_envelope": {"$ref": "#/$defs/fileReference"},
+        "certificate_bindings": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/certificateBinding"}
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.unasked.dev/v0.4/authorization-commit.schema.json",
+  "title": "UNASKED atomic authorization commit marker",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "run_id", "candidate_id", "prepared_graph_sha256", "prepared_graph_artifact_sha256", "evidence_bundle_hash", "trust_policy_sha256", "checkpoint_envelope_sha256", "checkpoint_payload_sha256", "custody_envelope_sha256", "custody_payload_sha256", "isolation_envelope_sha256", "isolation_payload_sha256", "authority_envelope_sha256", "authority_payload_sha256", "c_pre", "verdict_sha256", "certificate_sha256", "state_record_hash", "post_ledger_entries_before_marker", "post_ledger_head_before_marker", "committed_at"],
+  "properties": {
+    "schema_version": {"const": "0.4.0"},
+    "run_id": {"$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier"},
+    "candidate_id": {"$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier"},
+    "prepared_graph_sha256": {"$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256"},
+    "prepared_graph_artifact_sha256": {"$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256"},
+    "evidence_bundle_hash": {"$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256"},
+    "trust_policy_sha256": {"$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256"},
+    "checkpoint_envelope_sha256": {"$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256"},
+    "checkpoint_payload_sha256": {"$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256"},
+    "custody_envelope_sha256": {"$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256"},
+    "custody_payload_sha256": {"$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256"},
+    "isolation_envelope_sha256": {"$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256"},
+    "isolation_payload_sha256": {"$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256"},
+    "authority_envelope_sha256": {"$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256"},
+    "authority_payload_sha256": {"$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256"},
+    "c_pre": {"$ref": "#/$defs/ledger"},
+    "verdict_sha256": {"$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256"},
+    "certificate_sha256": {"$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256"},
+    "state_record_hash": {"$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256"},
+    "post_ledger_entries_before_marker": {"type": "integer", "minimum": 1},
+    "post_ledger_head_before_marker": {"$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256"},
+    "committed_at": {"$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/timestamp"}
+  },
+  "$defs": {
+    "ledger": {
+      "type": "object", "additionalProperties": false,
+      "required": ["entries", "last_hash", "sha256"],
+      "properties": {
+        "entries": {"type": "integer", "minimum": 1},
+        "last_hash": {"$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256"},
+        "sha256": {"$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256"}
+      }
+    }
+  }
+}

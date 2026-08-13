@@ -20,6 +20,28 @@ The Explorer receives only the target snapshot and frozen high-level prompt. The
 receives Explorer outputs only after run lock. Access logs and the sealed manifest hash are
 attached by the custodian, never synthesized by the Explorer.
 
-This project can validate a custodian-provided public manifest hash, but cannot attest that
-data was private or that organizational access controls existed. Those remain external
-evidence.
+For v0.4, custody, isolation, ledger-witness, discovery-authority, evaluator, and certifier
+keys are provisioned outside UNASKED. The trust policy is read once as exact bytes and pinned
+by a caller-provided lowercase SHA-256 before parsing. Private keys must remain in independent
+signing systems; they are never placed in the repository, exported resource kit, run
+workspace, or provider environment. Production role thresholds use unique keys and unique
+actor identities. A custodian actor must not also be the Explorer, executor, evaluator,
+authority, isolation attester, ledger witness, or M0 certifier.
+
+Each of the 35 runs needs an external isolation statement over the exact result bytes and a
+final ledger checkpoint over the exact complete ledger bytes. If a discovery was authorized,
+the final checkpoint comes after the unique `AUTHORIZATION_COMMITTED` event and binds the
+complete marker set. The authority signs the deterministic prepared pre-state graph; commit
+re-verifies all exact inputs while holding the run mutation lock. Any drift, missing marker,
+rollback, duplicate event, or substituted envelope invalidates the bundle.
+
+The evaluator signs only after all run outputs are locked, and the M0 certifier signs the
+evaluation envelope only after independently checking custody, the full 5-by-7 matrix,
+positive/control thresholds, replay, and provenance. A SHADOW policy is useful for dry runs
+but is categorically unable to authorize `M0_DEMONSTRATED`.
+
+Cryptographic verification proves that configured keys signed exact bytes. It cannot prove
+that people or organizations were genuinely independent, that a host or signing device was
+uncompromised, that no out-of-band ground-truth leakage occurred, or that a claimed isolation
+platform enforced its controls. Those facts require real-world governance, access logs,
+platform assurance, and independent audit beyond this software.

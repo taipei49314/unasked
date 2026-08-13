@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://schemas.unasked.dev/attestations/authority-authorization/v0.4",
+  "title": "UNASKED authority authorization predicate", "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "predicate_id", "issued_at", "issuer_actor_id", "trust_policy_sha256", "run_id", "candidate_id", "target_snapshot_hash", "protocol_hash", "knowledge_boundary_hash", "context_manifest_hash", "evidence_bundle_hash", "ledger_checkpoint_envelope_sha256", "custody_envelope_sha256", "isolation_envelope_sha256", "prepared_graph_sha256", "decision", "authorized_state", "expires_at"],
+  "properties": {
+    "schema_version": {"const": "0.4.0"}, "predicate_id": {"$ref": "#/$defs/id"}, "issued_at": {"$ref": "#/$defs/time"}, "issuer_actor_id": {"$ref": "#/$defs/id"}, "trust_policy_sha256": {"$ref": "#/$defs/hash"},
+    "run_id": {"$ref": "#/$defs/id"}, "candidate_id": {"$ref": "#/$defs/id"}, "target_snapshot_hash": {"$ref": "#/$defs/hash"}, "protocol_hash": {"$ref": "#/$defs/hash"}, "knowledge_boundary_hash": {"$ref": "#/$defs/hash"}, "context_manifest_hash": {"$ref": "#/$defs/hash"}, "evidence_bundle_hash": {"$ref": "#/$defs/hash"}, "ledger_checkpoint_envelope_sha256": {"$ref": "#/$defs/hash"}, "custody_envelope_sha256": {"$ref": "#/$defs/hash"}, "isolation_envelope_sha256": {"$ref": "#/$defs/hash"}, "prepared_graph_sha256": {"$ref": "#/$defs/hash"}, "decision": {"const": "AUTHORIZE_VERIFIED"}, "authorized_state": {"const": "VERIFIED"}, "expires_at": {"$ref": "#/$defs/time"}
+  },
+  "$defs": {"id": {"$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier"}, "hash": {"$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256"}, "time": {"$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/timestamp"}}
+}

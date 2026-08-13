@@ -22,9 +22,12 @@ SCHEMA_DRAFT = "https://json-schema.org/draft/2020-12/schema"
 SCHEMA_VERSION = "0.1.0"
 
 _SCHEMA_FILES = {
+    "authorization-commit": "authorization-commit.schema.json",
+    "authority-authorization-predicate": "authority-authorization-predicate.schema.json",
     "baseline-result": "baseline-result.schema.json",
     "budget-policy": "budget-policy.schema.json",
     "candidate": "candidate.schema.json",
+    "custody-attestation-predicate": "custody-attestation-predicate.schema.json",
     "discovery-certificate": "discovery-certificate.schema.json",
     "event": "event.schema.json",
     "evidence-reference": "evidence-reference.schema.json",
@@ -34,7 +37,10 @@ _SCHEMA_FILES = {
     "explorer-action": "explorer-action.schema.json",
     "hypothesis": "hypothesis.schema.json",
     "investigation-result": "investigation-result.schema.json",
+    "isolation-attestation-predicate": "isolation-attestation-predicate.schema.json",
     "knowledge-scan": "knowledge-scan.schema.json",
+    "ledger-checkpoint-predicate": "ledger-checkpoint-predicate.schema.json",
+    "m0-certification-predicate": "m0-certification-predicate.schema.json",
     "observation": "observation.schema.json",
     "replay-result": "replay-result.schema.json",
     "review": "review.schema.json",
@@ -42,8 +48,11 @@ _SCHEMA_FILES = {
     "trial-manifest": "trial-manifest.schema.json",
     "trial-preregistration": "trial-preregistration.schema.json",
     "trial-evidence-index": "trial-evidence-index.schema.json",
+    "trial-evaluation-predicate": "trial-evaluation-predicate.schema.json",
     "trial-evidence-audit": "trial-evidence-audit.schema.json",
     "trial-report": "trial-report.schema.json",
+    "trial-run-matrix": "trial-run-matrix.schema.json",
+    "trust-policy": "trust-policy.schema.json",
     "verdict": "verdict.schema.json",
 }
 _INTERNAL_FILES = ("common.schema.json",)

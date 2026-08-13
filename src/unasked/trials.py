@@ -1,30 +1,41 @@
 """Deterministic M0 trial aggregation and fail-closed certification.
 
-The aggregator is deliberately useful before a benchmark has valid custody: it
-can compare ablations and calculate metrics, but labels that output
-``NON_CERTIFYING``.  Version 0.3 can calculate the charter's aggregate thresholds,
-but it cannot authenticate a custodian or verify each external certificate/CAS/
-ledger bundle.  It therefore never emits an M0 success claim.
+The legacy aggregator and structural audit remain deliberately non-certifying. Version 0.4
+adds a separate authenticated path that verifies an externally supplied, exact-byte-pinned
+trust policy and complete signed evidence bundle. SHADOW or incomplete inputs still yield
+the exact negative result ``M0_NOT_DEMONSTRATED``; this package ships no qualifying run.
 """
 
 from __future__ import annotations
 
 import json
 import math
+import os
 import re
+import stat
 from collections.abc import Mapping, Sequence
+from datetime import datetime
 from decimal import ROUND_HALF_EVEN, Decimal, InvalidOperation
 from enum import StrEnum
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 from unasked.artifacts import ArtifactStore
+from unasked.attestations import (
+    verify_custody_attestation,
+    verify_isolation_attestation,
+    verify_ledger_checkpoint,
+    verify_m0_certification,
+    verify_trial_evaluation,
+)
 from unasked.authority import AuthorityKernel
 from unasked.errors import IntegrityError, PolicyError, UsageError
+from unasked.policy import Actor
 from unasked.project import Project
 from unasked.protocol import protocol_hash
 from unasked.schemas import validate_or_raise
-from unasked.util import canonical_json, hash_json, read_json, sha256_file
+from unasked.trust import parse_strict_json
+from unasked.util import canonical_json, hash_json, read_json, sha256_bytes, sha256_file
 
 SCHEMA_VERSION = "0.1.0"
 METRIC_QUANTUM = Decimal("0.000001")
@@ -912,8 +923,8 @@ def audit_trial_evidence(
 ) -> dict[str, Any]:
     """Structurally audit every trial finding against its preregistered run evidence.
 
-    A structural PASS is deliberately non-certifying: v0.3 has no authenticated
-    identities, custody signer, external attestation trust root, or checkpoint verifier.
+    This legacy structural PASS is deliberately non-certifying and cannot substitute for
+    the v0.4 authenticated custody, isolation, certificate, and checkpoint verification path.
     """
 
     report_value = dict(_mapping(_json_safe(report), "report"))
@@ -1027,6 +1038,692 @@ def audit_trial_evidence(
     return audit
 
 
+def _strict_document(raw: bytes, schema_name: str, label: str) -> dict[str, Any]:
+    value = parse_strict_json(raw)
+    if not isinstance(value, dict):
+        raise UsageError(f"{label} must be a strict JSON object.")
+    validate_or_raise(schema_name, value)
+    return value
+
+
+def _safe_matrix_file(base_path: Path, locator: str, expected_sha256: str) -> bytes:
+    """Read one matrix-relative regular file without crossing links or mount aliases."""
+
+    if not isinstance(locator, str) or not locator:
+        raise UsageError("Trial matrix file locators must be non-empty strings.")
+    posix = PurePosixPath(locator)
+    windows = PureWindowsPath(locator)
+    if any(
+        (
+            posix.is_absolute(),
+            bool(posix.root),
+            ".." in posix.parts,
+            windows.is_absolute(),
+            bool(windows.drive),
+            bool(windows.root),
+            ".." in windows.parts,
+        )
+    ):
+        raise UsageError("Trial matrix file locators must be safe relative paths.")
+    base = base_path.expanduser().resolve()
+    candidate = base.joinpath(*posix.parts)
+    cursor = base
+    for part in posix.parts:
+        cursor /= part
+        try:
+            metadata = cursor.lstat()
+        except OSError as exc:
+            raise IntegrityError(
+                "Trial matrix evidence file is missing.", details={"path": locator}
+            ) from exc
+        attributes = int(getattr(metadata, "st_file_attributes", 0))
+        if stat.S_ISLNK(metadata.st_mode) or attributes & 0x400:
+            raise UsageError("Trial matrix evidence paths cannot contain links or reparse points.")
+    try:
+        resolved = candidate.resolve(strict=True)
+    except OSError as exc:
+        raise IntegrityError(
+            "Trial matrix evidence file is missing.", details={"path": locator}
+        ) from exc
+    if resolved != base and base not in resolved.parents:
+        raise UsageError("Trial matrix evidence file resolves outside the matrix directory.")
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(candidate, flags)
+    except OSError as exc:
+        raise IntegrityError(
+            "Trial matrix evidence file could not be opened safely.", details={"path": locator}
+        ) from exc
+    try:
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode):
+            raise UsageError("Trial matrix evidence locators must identify regular files.")
+        chunks: list[bytes] = []
+        while chunk := os.read(descriptor, 1024 * 1024):
+            chunks.append(chunk)
+        after = os.fstat(descriptor)
+        if (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns) != (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+        ):
+            raise IntegrityError("Trial matrix evidence changed during exact-byte read.")
+        raw = b"".join(chunks)
+    finally:
+        os.close(descriptor)
+    if sha256_bytes(raw) != expected_sha256:
+        raise IntegrityError("Trial matrix evidence hash mismatch.", details={"path": locator})
+    return raw
+
+
+def _matrix_relative_workspace(base_path: Path, locator: str) -> Path:
+    if not isinstance(locator, str) or not locator:
+        raise UsageError("Trial matrix workspace locators must be non-empty strings.")
+    native = Path(locator)
+    posix = PurePosixPath(locator)
+    windows = PureWindowsPath(locator)
+    if any(
+        (
+            native.is_absolute(),
+            bool(native.drive),
+            posix.is_absolute(),
+            bool(posix.root),
+            ".." in posix.parts,
+            windows.is_absolute(),
+            bool(windows.drive),
+            bool(windows.root),
+            ".." in windows.parts,
+        )
+    ):
+        raise UsageError("Trial matrix workspaces must be safe relative paths.")
+    base = base_path.expanduser().resolve()
+    cursor = base
+    for part in native.parts:
+        cursor /= part
+        try:
+            metadata = cursor.lstat()
+        except OSError as exc:
+            raise IntegrityError(
+                "Trial matrix workspace is missing.", details={"workspace": locator}
+            ) from exc
+        attributes = int(getattr(metadata, "st_file_attributes", 0))
+        if stat.S_ISLNK(metadata.st_mode) or attributes & 0x400:
+            raise UsageError("Trial matrix workspace cannot contain links or reparse points.")
+    try:
+        candidate = (base / native).resolve(strict=True)
+    except OSError as exc:
+        raise IntegrityError(
+            "Trial matrix workspace changed during validation.", details={"workspace": locator}
+        ) from exc
+    if candidate != base and base not in candidate.parents:
+        raise UsageError("Trial matrix workspace escapes the matrix directory.")
+    if not candidate.is_dir():
+        raise UsageError("Trial matrix workspace must identify a directory.")
+    return candidate
+
+
+def _certificate_set_sha256(bindings: Sequence[Mapping[str, Any]]) -> str:
+    return hash_json(
+        [
+            {
+                "candidate_id": binding["candidate_id"],
+                "authority_envelope_sha256": binding["authority_envelope"]["sha256"],
+                "c_pre_checkpoint_envelope_sha256": binding["c_pre_checkpoint_envelope"]["sha256"],
+            }
+            for binding in sorted(bindings, key=lambda item: item["candidate_id"])
+        ]
+    )
+
+
+def _verify_matrix_run_result(
+    entry: Mapping[str, Any],
+    indexed: Mapping[str, Any],
+    *,
+    project: Project,
+    run: Mapping[str, Any],
+    target: Mapping[str, Any],
+    events: Sequence[Mapping[str, Any]],
+    result_bytes: bytes,
+    protocol_digest: str,
+) -> None:
+    """Bind the signed matrix result to the actual run artifact and completion event."""
+
+    reference = indexed["result_ref"]
+    if reference["sha256"] != entry["result"]["sha256"]:
+        raise IntegrityError("Matrix and evidence index result hashes do not match.")
+    result = parse_strict_json(result_bytes)
+    if not isinstance(result, dict):
+        raise UsageError("Trial matrix result must be a strict JSON object.")
+    run_id = entry["run_id"]
+    if entry["variant"] == AblationVariant.DETERMINISTIC_DETECTORS_ONLY.value:
+        if reference != {
+            "kind": "BASELINE_RESULT",
+            "storage": "CAS",
+            "sha256": entry["result"]["sha256"],
+        }:
+            raise IntegrityError("Deterministic matrix result has an invalid index reference.")
+        validate_or_raise("baseline-result", result)
+        store = ArtifactStore(project.artifacts_root)
+        store.verify_or_raise(reference["sha256"])
+        if store.read_bytes(reference["sha256"]) != result_bytes:
+            raise IntegrityError("Baseline matrix result is not the exact run CAS artifact.")
+        if not all(
+            (
+                result["run_id"] == run_id,
+                result["snapshot_hash"] == target["snapshot_hash"],
+                result["snapshot_commit"] == target["commit"],
+                result["protocol_hash"] == protocol_digest,
+                _matching_artifact_event(
+                    events,
+                    event_type="DETERMINISTIC_BASELINE_COMPLETED",
+                    digest=reference["sha256"],
+                    expected_payload={
+                        "baseline_run_id": result["baseline_run_id"],
+                        "signal_count": result["signal_count"],
+                        "snapshot_hash": result["snapshot_hash"],
+                        "protocol_hash": result["protocol_hash"],
+                    },
+                ),
+            )
+        ):
+            raise IntegrityError("Baseline matrix result is not bound to its run and ledger.")
+        return
+
+    expected_mode = _INVESTIGATION_MODES[entry["variant"]]
+    if reference != {
+        "kind": "INVESTIGATION_RESULT",
+        "storage": "RUN_FILE",
+        "sha256": entry["result"]["sha256"],
+        "path": "investigation/result.json",
+    }:
+        raise IntegrityError("Investigation matrix result has an invalid index reference.")
+    validate_or_raise("investigation-result", result)
+    paths = project.paths(run_id)
+    actual_result_path = paths.root / "investigation" / "result.json"
+    actual_result_bytes = actual_result_path.read_bytes()
+    if (
+        actual_result_bytes != result_bytes
+        or sha256_bytes(actual_result_bytes) != reference["sha256"]
+    ):
+        raise IntegrityError("Investigation matrix result is not the exact run result file.")
+    start_path = paths.root / "investigation" / "start.json"
+    start_bytes = start_path.read_bytes()
+    start = parse_strict_json(start_bytes)
+    if not isinstance(start, dict):
+        raise UsageError("Investigation start record must be a strict JSON object.")
+    budget_hash = run["budget_policy_hash"]
+    expected_provider = {
+        "provider": result["provider"]["provider"],
+        "name": result["provider"]["model"],
+    }
+    if not all(
+        (
+            result["run_id"] == run_id,
+            result["mode"] == expected_mode,
+            result["provenance"]["target_snapshot_hash"] == target["snapshot_hash"],
+            result["provenance"]["protocol_hash"] == protocol_digest,
+            result["provenance"]["budget_policy_hash"] == budget_hash,
+            hash_json(result["budget"]["limits"]) == budget_hash,
+            expected_provider == run["model"],
+            start.get("run_id") == run_id,
+            start.get("mode") == expected_mode,
+            start.get("target_snapshot_hash") == target["snapshot_hash"],
+            start.get("protocol_hash") == protocol_digest,
+            start.get("budget_policy_hash") == budget_hash,
+            start.get("budget_policy") == result["budget"]["limits"],
+            start.get("provider") == result["provider"],
+            _matching_artifact_event(
+                events,
+                event_type="INVESTIGATION_STARTED",
+                digest=sha256_bytes(start_bytes),
+                path="investigation/start.json",
+            ),
+            _matching_artifact_event(
+                events,
+                event_type="INVESTIGATION_COMPLETED",
+                digest=reference["sha256"],
+                path="investigation/result.json",
+            ),
+        )
+    ):
+        raise IntegrityError("Investigation matrix result is not bound to its frozen run inputs.")
+
+
+def certify_m0_v2(
+    certification_envelope_bytes: bytes,
+    trial_evaluation_envelope_bytes: bytes,
+    *,
+    trust_policy_bytes: bytes,
+    trust_policy_sha256: str,
+    manifest_bytes: bytes,
+    custody_envelope_bytes: bytes,
+    report_bytes: bytes,
+    evidence_index_bytes: bytes,
+    audit_bytes: bytes,
+    run_matrix_bytes: bytes,
+    base_path: Path,
+    now: datetime | str | None = None,
+) -> dict[str, Any]:
+    """Authenticate a complete v0.4 5x7 M0 matrix without trusting producer flags."""
+
+    manifest = _strict_document(manifest_bytes, "trial-manifest", "Trial manifest")
+    report = _strict_document(report_bytes, "trial-report", "Trial report")
+    evidence_index = _strict_document(
+        evidence_index_bytes, "trial-evidence-index", "Trial evidence index"
+    )
+    audit = _strict_document(audit_bytes, "trial-evidence-audit", "Trial evidence audit")
+    matrix = _strict_document(run_matrix_bytes, "trial-run-matrix", "Trial run matrix")
+    report_hash = _verify_self_hash(report, "report_hash", "Trial report")
+    index_hash = _verify_self_hash(evidence_index, "index_hash", "Trial evidence index")
+    audit_hash = _verify_self_hash(audit, "audit_hash", "Trial evidence audit")
+    matrix_hash = _verify_self_hash(matrix, "matrix_sha256", "Trial run matrix")
+    rebuilt = aggregate_trials(report["manifest"], report["variant_results"])
+    if canonical_json(rebuilt) != canonical_json(report):
+        raise IntegrityError("Trial report does not match deterministic recomputation.")
+    manifest_sha256 = sha256_bytes(manifest_bytes)
+    protocol_hashes = {item["protocol_hash"] for item in report["variant_results"]}
+    if len(protocol_hashes) != 1:
+        raise IntegrityError("Trial report does not bind one protocol hash.")
+    protocol_digest = next(iter(protocol_hashes))
+    if not all(
+        (
+            manifest == report["manifest"],
+            matrix["suite_id"] == report["suite_id"] == audit["suite_id"],
+            matrix["manifest_sha256"] == manifest_sha256,
+            matrix["protocol_hash"] == protocol_digest == audit["protocol_hash"],
+            evidence_index["suite_id"] == report["suite_id"],
+            evidence_index["manifest_hash"] == report["manifest_hash"],
+            evidence_index["protocol_hash"] == protocol_digest,
+            evidence_index["report_hash"] == report_hash,
+            audit["manifest_hash"] == report["manifest_hash"],
+            audit["report_hash"] == report_hash,
+            audit["evidence_index_hash"] == index_hash,
+            audit["recomputed_report_hash"] == report_hash,
+        )
+    ):
+        raise IntegrityError("M0 v2 top-level evidence bindings are inconsistent.")
+
+    case_items = list(manifest["cases"])
+    cases = {item["case_id"]: item for item in case_items}
+    positive_count = sum(item["kind"] == "POSITIVE" for item in case_items)
+    control_count = sum(item["kind"] == "CONTROL" for item in case_items)
+    manifest_gate_names = (
+        "case_mix_exact",
+        "benchmark_sealed",
+        "independent_custody",
+        "sealed_before_explorer",
+    )
+    if any(
+        (
+            len(case_items) != 7,
+            len(cases) != 7,
+            positive_count != 5,
+            control_count != 2,
+            not all(report["gates"].get(name) is True for name in manifest_gate_names),
+        )
+    ):
+        raise IntegrityError("M0 manifest is not the exact sealed 5-positive/2-control case mix.")
+    entries = list(matrix["entries"])
+    pairs = {(entry["variant"], entry["case_id"]) for entry in entries}
+    expected_pairs = {(variant, case_id) for variant in ABLATION_VARIANTS for case_id in cases}
+    workspaces = [_matrix_relative_workspace(base_path, entry["workspace"]) for entry in entries]
+    if any(
+        (
+            len(cases) != 7,
+            len(entries) != 35,
+            pairs != expected_pairs,
+            len(pairs) != 35,
+            len({entry["run_id"] for entry in entries}) != 35,
+            len(set(workspaces)) != 35,
+        )
+    ):
+        raise IntegrityError("Trial run matrix is not one unique 5x7 Cartesian run set.")
+
+    verified_custody = verify_custody_attestation(
+        custody_envelope_bytes,
+        trust_policy_bytes=trust_policy_bytes,
+        trust_policy_sha256=trust_policy_sha256,
+        manifest_bytes=manifest_bytes,
+        expected_suite_id=matrix["suite_id"],
+        expected_manifest_sha256=manifest_sha256,
+        now=now,
+    )
+    findings = {
+        (variant_result["variant"], finding["case_id"]): finding
+        for variant_result in report["variant_results"]
+        for finding in variant_result["findings"]
+    }
+    raw_index_entries = list(evidence_index["entries"])
+    index_keys = [(entry["variant"], entry["case_id"]) for entry in raw_index_entries]
+    index_run_locations = [(entry["workspace"], entry["run_id"]) for entry in raw_index_entries]
+    if any(
+        (
+            len(raw_index_entries) != 35,
+            len(set(index_keys)) != 35,
+            set(index_keys) != expected_pairs,
+            len(set(index_run_locations)) != 35,
+        )
+    ):
+        raise IntegrityError("Trial evidence index is not one exact unique 5x7 run matrix.")
+    index_entries = {(entry["variant"], entry["case_id"]): entry for entry in raw_index_entries}
+    derived: dict[tuple[str, str], dict[str, Any]] = {}
+    run_bindings: list[dict[str, Any]] = []
+    certificate_graphs_valid = True
+    isolation_attestations_authenticated = True
+    ledger_checkpoints_authenticated = True
+    for entry, workspace in sorted(
+        zip(entries, workspaces, strict=True),
+        key=lambda pair: (pair[0]["variant"], pair[0]["case_id"]),
+    ):
+        key = (entry["variant"], entry["case_id"])
+        indexed = index_entries.get(key)
+        if indexed is None or indexed["run_id"] != entry["run_id"]:
+            raise IntegrityError("Trial matrix entry is not covered by the evidence index.")
+        project = Project.open(workspace)
+        run = project.get_run(entry["run_id"])
+        target = project.get_target(entry["run_id"])
+        trial = project.validate_trial_binding(entry["run_id"])
+        if trial is None:
+            raise IntegrityError("Trial matrix run lacks its immutable preregistration binding.")
+        preregistration, budget = trial
+        run_binding = run["trial_binding"]
+        if not all(
+            (
+                indexed["workspace"] == entry["workspace"],
+                run["run_id"] == indexed["run_id"] == entry["run_id"],
+                sha256_file(project.paths(entry["run_id"]).run) == indexed["run_sha256"],
+                run_binding["suite_id"] == matrix["suite_id"],
+                run_binding["case_id"] == entry["case_id"],
+                run_binding["variant"] == entry["variant"],
+                run_binding["manifest_hash"] == report["manifest_hash"],
+                run_binding["preregistration_hash"] == indexed["preregistration_hash"],
+                preregistration["manifest_hash"] == report["manifest_hash"],
+                preregistration["protocol_hash"] == protocol_digest,
+                preregistration["budget_policy_hash"] == indexed["budget_policy_hash"],
+                run["budget_policy_hash"] == budget.sha256 == indexed["budget_policy_hash"],
+                run["protocol"]["sha256"] == protocol_digest,
+            )
+        ):
+            raise IntegrityError("Trial matrix run and evidence-index bindings are inconsistent.")
+        result_bytes = _safe_matrix_file(
+            base_path, entry["result"]["path"], entry["result"]["sha256"]
+        )
+        ledger_bytes = _safe_matrix_file(
+            base_path, entry["ledger"]["path"], entry["ledger"]["sha256"]
+        )
+        if ledger_bytes != project.paths(entry["run_id"]).ledger.read_bytes():
+            raise IntegrityError("Signed final ledger is not the current project ledger bytes.")
+        ledger_report = project.ledger(entry["run_id"]).verify(raise_on_error=True)
+        if (
+            indexed["ledger"]["entries"] != ledger_report.entries
+            or indexed["ledger"]["last_hash"] != ledger_report.last_hash
+        ):
+            raise IntegrityError(
+                "Evidence index ledger head does not match the signed final ledger."
+            )
+        _verify_matrix_run_result(
+            entry,
+            indexed,
+            project=project,
+            run=run,
+            target=target,
+            events=project.ledger(entry["run_id"]).read_all(),
+            result_bytes=result_bytes,
+            protocol_digest=protocol_digest,
+        )
+        isolation_bytes = _safe_matrix_file(
+            base_path, entry["isolation_envelope"]["path"], entry["isolation_envelope"]["sha256"]
+        )
+        final_checkpoint_bytes = _safe_matrix_file(
+            base_path,
+            entry["final_checkpoint_envelope"]["path"],
+            entry["final_checkpoint_envelope"]["sha256"],
+        )
+        isolation = verify_isolation_attestation(
+            isolation_bytes,
+            trust_policy_bytes=trust_policy_bytes,
+            trust_policy_sha256=trust_policy_sha256,
+            result_bytes=result_bytes,
+            expected_suite_id=matrix["suite_id"],
+            expected_case_id=entry["case_id"],
+            expected_variant=entry["variant"],
+            expected_run_id=entry["run_id"],
+            expected_target_snapshot_hash=target["snapshot_hash"],
+            expected_protocol_hash=protocol_digest,
+            now=now,
+        )
+        final_checkpoint = verify_ledger_checkpoint(
+            final_checkpoint_bytes,
+            trust_policy_bytes=trust_policy_bytes,
+            trust_policy_sha256=trust_policy_sha256,
+            ledger_bytes=ledger_bytes,
+            expected_suite_id=matrix["suite_id"],
+            expected_case_id=entry["case_id"],
+            expected_variant=entry["variant"],
+            expected_run_id=entry["run_id"],
+            expected_target_snapshot_hash=target["snapshot_hash"],
+            expected_protocol_hash=protocol_digest,
+            now=now,
+        )
+        certificate_audits: list[dict[str, Any]] = []
+        indexed_certificates = {item["candidate_id"]: item for item in indexed["certificate_refs"]}
+        for certificate_binding in entry["certificate_bindings"]:
+            authority_bytes = _safe_matrix_file(
+                base_path,
+                certificate_binding["authority_envelope"]["path"],
+                certificate_binding["authority_envelope"]["sha256"],
+            )
+            c_pre_bytes = _safe_matrix_file(
+                base_path,
+                certificate_binding["c_pre_checkpoint_envelope"]["path"],
+                certificate_binding["c_pre_checkpoint_envelope"]["sha256"],
+            )
+            verdict = read_json(
+                project.candidate_dir(entry["run_id"], certificate_binding["candidate_id"])
+                / "verdict.json"
+            )
+            authority_data = verdict["authority_actor"]
+            authority = Actor(authority_data["actor_id"], authority_data["role"])
+            certificate_audit = AuthorityKernel(project).audit_certificate_v2(
+                entry["run_id"],
+                certificate_binding["candidate_id"],
+                authority=authority,
+                authority_envelope_bytes=authority_bytes,
+                checkpoint_envelope_bytes=c_pre_bytes,
+                custody_envelope_bytes=custody_envelope_bytes,
+                isolation_envelope_bytes=isolation_bytes,
+                trust_policy_bytes=trust_policy_bytes,
+                trust_policy_sha256=trust_policy_sha256,
+                manifest_bytes=manifest_bytes,
+                isolation_result_bytes=result_bytes,
+                now=now,
+            )
+            indexed_certificate = indexed_certificates.get(certificate_binding["candidate_id"])
+            if (
+                indexed_certificate is None
+                or certificate_audit.get("certificate_sha256")
+                != indexed_certificate["certificate_sha256"]
+            ):
+                raise IntegrityError(
+                    "Evidence index certificate digest does not match the v2 certificate audit."
+                )
+            certificate_audits.append(certificate_audit)
+        expected_certificate_ids = {item["candidate_id"] for item in indexed["certificate_refs"]}
+        matrix_certificate_ids = {item["candidate_id"] for item in entry["certificate_bindings"]}
+        if len(expected_certificate_ids) != len(indexed["certificate_refs"]) or len(
+            matrix_certificate_ids
+        ) != len(entry["certificate_bindings"]):
+            raise IntegrityError("Trial certificate bindings contain duplicate candidate IDs.")
+        committed_candidate_ids: set[str] = set()
+        for candidate_root in project.paths(entry["run_id"]).discoveries.iterdir():
+            if candidate_root.is_symlink() or not candidate_root.is_dir():
+                raise IntegrityError("Trial discoveries contain an unsafe candidate entry.")
+            if (candidate_root / "authorization-commit.json").is_file():
+                committed_candidate_ids.add(candidate_root.name)
+        complete = expected_certificate_ids == matrix_certificate_ids == committed_candidate_ids
+        if not complete:
+            raise IntegrityError(
+                "Matrix, index, and authorization marker candidate sets do not match exactly."
+            )
+        actual_verified = bool(matrix_certificate_ids)
+        committed_events = [
+            event
+            for event in project.ledger(entry["run_id"]).read_all()
+            if event.get("event_type") == "AUTHORIZATION_COMMITTED"
+        ]
+        committed_ids = {event.get("payload", {}).get("candidate_id") for event in committed_events}
+        if matrix_certificate_ids != committed_ids or len(committed_events) != len(committed_ids):
+            raise IntegrityError(
+                "Final authenticated checkpoint does not exactly cover authorization markers."
+            )
+        derived[key] = _derive_verified_finding(
+            entry["case_id"],
+            certificate_audits,
+            actual_verified=actual_verified,
+            certificate_set_complete=complete,
+        )
+        if actual_verified:
+            derived[key]["external_authority"] = all(
+                item.get("valid") is True for item in certificate_audits
+            )
+        certificate_graphs_valid &= complete and all(
+            item.get("valid") is True for item in certificate_audits
+        )
+        run_bindings.append(
+            {
+                "variant": entry["variant"],
+                "case_id": entry["case_id"],
+                "run_id": entry["run_id"],
+                "target_snapshot_hash": target["snapshot_hash"],
+                "result_sha256": entry["result"]["sha256"],
+                "isolation_envelope_sha256": entry["isolation_envelope"]["sha256"],
+                "ledger_checkpoint_envelope_sha256": entry["final_checkpoint_envelope"]["sha256"],
+                "evidence_index_entry_sha256": hash_json(indexed),
+                "certificate_set_sha256": _certificate_set_sha256(entry["certificate_bindings"]),
+            }
+        )
+        if not isolation.production_qualified or not final_checkpoint.production_qualified:
+            certificate_graphs_valid = False
+        isolation_attestations_authenticated &= isolation.production_qualified
+        ledger_checkpoints_authenticated &= final_checkpoint.production_qualified
+
+    if any(canonical_json(derived[key]) != canonical_json(findings[key]) for key in expected_pairs):
+        raise IntegrityError("Authenticated M0 findings do not match the deterministic report.")
+    evaluation = verify_trial_evaluation(
+        trial_evaluation_envelope_bytes,
+        trust_policy_bytes=trust_policy_bytes,
+        trust_policy_sha256=trust_policy_sha256,
+        custody_envelope_bytes=custody_envelope_bytes,
+        report_bytes=report_bytes,
+        evidence_index_bytes=evidence_index_bytes,
+        audit_bytes=audit_bytes,
+        run_matrix_bytes=run_matrix_bytes,
+        expected_suite_id=matrix["suite_id"],
+        expected_manifest_sha256=manifest_sha256,
+        expected_protocol_hash=protocol_digest,
+        expected_run_bindings=run_bindings,
+        now=now,
+    )
+    full_findings = [derived[(FULL_SYSTEM_VARIANT, case_id)] for case_id in sorted(cases)]
+    claimed = [
+        finding for finding in full_findings if finding["claimed_verified"] or finding["verified"]
+    ]
+    trusted = [
+        finding
+        for finding in full_findings
+        if _trusted_positive(finding, cases[finding["case_id"]]["kind"])
+    ]
+    false_claims = [
+        finding
+        for finding in claimed
+        if not _trusted_positive(finding, cases[finding["case_id"]]["kind"])
+    ]
+    false_controls = [
+        finding for finding in claimed if cases[finding["case_id"]]["kind"] == "CONTROL"
+    ]
+    clean_replay = [finding for finding in claimed if finding["replay_passed"]]
+    context_complete = bool(claimed) and all(finding["evidence_complete"] for finding in claimed)
+    production_mode = evaluation.trust_mode == "PRODUCTION"
+    expected_observed = {
+        "trusted_verified_positives": len(trusted),
+        "false_verified_controls": len(false_controls),
+        "false_verified_claims": len(false_claims),
+        "claimed_verified_total": len(claimed),
+        "clean_replay_verified": len(clean_replay),
+        "context_provenance_complete": context_complete,
+        "target_snapshot_immutable": True,
+        "hidden_inputs_immutable": verified_custody.production_qualified,
+        "scoring_policy_immutable": True,
+    }
+    expected_gates = {
+        "matrix_complete": True,
+        "independent_custody": verified_custody.production_qualified,
+        "sealed_before_explorer": verified_custody.production_qualified,
+        "actor_identities_authenticated": production_mode,
+        "isolation_attestations_authenticated": isolation_attestations_authenticated,
+        "ledger_checkpoints_authenticated": ledger_checkpoints_authenticated,
+        "certificate_graphs_valid": production_mode and certificate_graphs_valid,
+        "positive_threshold_met": len(trusted) >= 3,
+        "control_threshold_met": not false_controls and not false_claims,
+        "clean_replay_complete": len(clean_replay) == len(claimed) and not false_claims,
+        "context_provenance_complete": context_complete,
+        "inputs_immutable": verified_custody.production_qualified,
+    }
+    if (
+        evaluation.predicate["observed"] != expected_observed
+        or evaluation.predicate["gates"] != expected_gates
+    ):
+        raise IntegrityError(
+            "Signed trial evaluation does not match authenticated v2 findings and gates."
+        )
+    certification = verify_m0_certification(
+        certification_envelope_bytes,
+        trust_policy_bytes=trust_policy_bytes,
+        trust_policy_sha256=trust_policy_sha256,
+        manifest_bytes=manifest_bytes,
+        custody_envelope_bytes=custody_envelope_bytes,
+        trial_evaluation_envelope_bytes=trial_evaluation_envelope_bytes,
+        report_bytes=report_bytes,
+        evidence_index_bytes=evidence_index_bytes,
+        audit_bytes=audit_bytes,
+        run_matrix_bytes=run_matrix_bytes,
+        expected_suite_id=matrix["suite_id"],
+        expected_manifest_sha256=manifest_sha256,
+        expected_protocol_hash=protocol_digest,
+        expected_run_bindings=run_bindings,
+        now=now,
+    )
+    demonstrated = bool(
+        certification.demonstrated
+        and evaluation.production_qualified
+        and certificate_graphs_valid
+        and evaluation.predicate["status"] == "THRESHOLDS_MET"
+    )
+    if certification.statement.predicate["decision"] == "M0_DEMONSTRATED" and not demonstrated:
+        raise IntegrityError("Signed M0_DEMONSTRATED claim does not match authenticated gates.")
+    return {
+        "status": "M0_DEMONSTRATED" if demonstrated else "M0_NOT_DEMONSTRATED",
+        "m0_demonstrated": demonstrated,
+        "claim": certification.statement.predicate["claim"],
+        "legacy_structural_audit_authoritative": False,
+        "authenticated_v2_audit": True,
+        "suite_id": matrix["suite_id"],
+        "trust_policy_sha256": trust_policy_sha256,
+        "manifest_sha256": manifest_sha256,
+        "report_sha256": sha256_bytes(report_bytes),
+        "evidence_index_sha256": sha256_bytes(evidence_index_bytes),
+        "audit_sha256": sha256_bytes(audit_bytes),
+        "run_matrix_sha256": sha256_bytes(run_matrix_bytes),
+        "run_matrix_self_hash": matrix_hash,
+        "trial_evaluation_envelope_sha256": sha256_bytes(trial_evaluation_envelope_bytes),
+        "certification_envelope_sha256": sha256_bytes(certification_envelope_bytes),
+        "legacy_report_hash": report_hash,
+        "legacy_evidence_index_hash": index_hash,
+        "legacy_audit_hash": audit_hash,
+    }
+
+
 __all__ = [
     "ABLATION_VARIANTS",
     "FULL_SYSTEM_VARIANT",
@@ -1035,5 +1732,6 @@ __all__ = [
     "aggregate_trials",
     "audit_trial_evidence",
     "certify_m0",
+    "certify_m0_v2",
     "manifest_digest",
 ]

@@ -4,8 +4,6 @@ import json
 import math
 import os
 import re
-import stat
-import threading
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -14,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from unasked.errors import IntegrityError, UsageError
+from unasked.locking import exclusive_file_lock
 from unasked.schemas import validate
 from unasked.util import canonical_json, hash_json, require_identifier, utc_now
 
@@ -47,62 +46,13 @@ CAPABILITIES = frozenset(
     }
 )
 
-_THREAD_LOCKS_GUARD = threading.Lock()
-_THREAD_LOCKS: dict[str, threading.RLock] = {}
-
-
-def _thread_lock_for(path: Path) -> threading.RLock:
-    key = os.path.normcase(os.path.abspath(path))
-    with _THREAD_LOCKS_GUARD:
-        return _THREAD_LOCKS.setdefault(key, threading.RLock())
-
 
 @contextmanager
 def _exclusive_ledger_lock(path: Path) -> Iterator[None]:
     """Serialize a ledger mutation across threads and processes."""
 
-    lock_path = path.with_name(f"{path.name}.lock")
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    thread_lock = _thread_lock_for(lock_path)
-    with thread_lock:
-        flags = os.O_CREAT | os.O_RDWR
-        for flag_name in ("O_BINARY", "O_CLOEXEC", "O_NOINHERIT", "O_NOFOLLOW"):
-            flags |= getattr(os, flag_name, 0)
-        descriptor = os.open(lock_path, flags, 0o600)
-        locked = False
-        try:
-            lock_stat = os.fstat(descriptor)
-            if not stat.S_ISREG(lock_stat.st_mode):
-                raise IntegrityError(
-                    "The event ledger lock path is not a regular file.",
-                    details={"path": str(lock_path)},
-                )
-            if lock_stat.st_size == 0:
-                os.write(descriptor, b"\0")
-                os.fsync(descriptor)
-            os.lseek(descriptor, 0, os.SEEK_SET)
-            if os.name == "nt":
-                import msvcrt
-
-                msvcrt.locking(descriptor, msvcrt.LK_LOCK, 1)
-            else:
-                import fcntl
-
-                fcntl.flock(descriptor, fcntl.LOCK_EX)
-            locked = True
-            yield
-        finally:
-            if locked:
-                os.lseek(descriptor, 0, os.SEEK_SET)
-                if os.name == "nt":
-                    import msvcrt
-
-                    msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
-                else:
-                    import fcntl
-
-                    fcntl.flock(descriptor, fcntl.LOCK_UN)
-            os.close(descriptor)
+    with exclusive_file_lock(path.with_name(f"{path.name}.lock")):
+        yield
 
 
 @dataclass(frozen=True, slots=True)

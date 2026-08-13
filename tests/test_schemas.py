@@ -23,6 +23,270 @@ COMMIT = "c" * 40
 NOW = "2026-08-09T09:00:00Z"
 
 
+def v04_examples() -> dict[str, dict]:
+    roles = (
+        ("DISCOVERY_AUTHORITY", "authority-authorization"),
+        ("CUSTODIAN", "custody"),
+        ("ISOLATION_ATTESTER", "isolation"),
+        ("LEDGER_WITNESS", "ledger-checkpoint"),
+        ("TRIAL_EVALUATOR", "trial-evaluation"),
+        ("M0_CERTIFIER", "m0-certification"),
+    )
+    common = {
+        "schema_version": "0.4.0",
+        "predicate_id": "PRED-1",
+        "issued_at": NOW,
+        "issuer_actor_id": "actor-1",
+        "trust_policy_sha256": HASH,
+    }
+    variants = (
+        "deterministic-detectors-only",
+        "read-only-llm-reviewer",
+        "llm-tools-no-experiment-gate",
+        "experiment-loop-without-falsifier",
+        "full-evidence-gated-system",
+    )
+    run_bindings = [
+        {
+            "variant": variant,
+            "case_id": f"CASE-{case}",
+            "run_id": f"RUN-{variant}-{case}",
+            "target_snapshot_hash": HASH,
+            "result_sha256": HASH,
+            "isolation_envelope_sha256": HASH,
+            "ledger_checkpoint_envelope_sha256": HASH,
+            "evidence_index_entry_sha256": HASH,
+            "certificate_set_sha256": HASH,
+        }
+        for variant in variants
+        for case in range(1, 8)
+    ]
+    gates = {
+        "matrix_complete": False,
+        "independent_custody": False,
+        "sealed_before_explorer": False,
+        "actor_identities_authenticated": False,
+        "isolation_attestations_authenticated": False,
+        "ledger_checkpoints_authenticated": False,
+        "certificate_graphs_valid": False,
+        "positive_threshold_met": False,
+        "control_threshold_met": False,
+        "clean_replay_complete": False,
+        "context_provenance_complete": False,
+        "inputs_immutable": False,
+    }
+    matrix_entries = [
+        {
+            "variant": variant,
+            "case_id": f"CASE-{case}",
+            "run_id": f"RUN-{variant}-{case}",
+            "workspace": f"workspaces/{variant}-{case}",
+            "result": {"path": f"evidence/{variant}-{case}/result.json", "sha256": HASH},
+            "ledger": {"path": f"evidence/{variant}-{case}/ledger.jsonl", "sha256": HASH},
+            "isolation_envelope": {
+                "path": f"evidence/{variant}-{case}/isolation.dsse.json",
+                "sha256": HASH,
+            },
+            "final_checkpoint_envelope": {
+                "path": f"evidence/{variant}-{case}/final-checkpoint.dsse.json",
+                "sha256": HASH,
+            },
+            "certificate_bindings": [],
+        }
+        for variant in variants
+        for case in range(1, 8)
+    ]
+    matrix = {
+        "schema_version": "0.4.0",
+        "suite_id": "SUITE-1",
+        "manifest_sha256": HASH,
+        "protocol_hash": HASH,
+        "entries": matrix_entries,
+    }
+    matrix["matrix_sha256"] = hash_json(matrix)
+    return {
+        "authorization-commit": {
+            "schema_version": "0.4.0",
+            "run_id": "RUN-1",
+            "candidate_id": "CANDIDATE-1",
+            "prepared_graph_sha256": HASH,
+            "prepared_graph_artifact_sha256": HASH,
+            "evidence_bundle_hash": HASH,
+            "trust_policy_sha256": HASH,
+            "checkpoint_envelope_sha256": HASH,
+            "checkpoint_payload_sha256": HASH,
+            "custody_envelope_sha256": HASH,
+            "custody_payload_sha256": HASH,
+            "isolation_envelope_sha256": HASH,
+            "isolation_payload_sha256": HASH,
+            "authority_envelope_sha256": HASH,
+            "authority_payload_sha256": HASH,
+            "c_pre": {"entries": 1, "last_hash": HASH, "sha256": HASH},
+            "verdict_sha256": HASH,
+            "certificate_sha256": HASH,
+            "state_record_hash": HASH,
+            "post_ledger_entries_before_marker": 4,
+            "post_ledger_head_before_marker": HASH,
+            "committed_at": NOW,
+        },
+        "trial-run-matrix": matrix,
+        "trust-policy": {
+            "schema_version": "0.4.0",
+            "policy_id": "POLICY-1",
+            "mode": "PRODUCTION",
+            "issued_at": NOW,
+            "valid_from": NOW,
+            "valid_until": "2027-08-09T09:00:00Z",
+            "algorithm": "Ed25519",
+            "dsse_payload_type": "application/vnd.in-toto+json",
+            "statement_type": "https://in-toto.io/Statement/v1",
+            "keys": [
+                {
+                    "key_id": f"KEY-{index}",
+                    "actor_id": f"ACTOR-{index}",
+                    "role": role,
+                    "status": "ACTIVE",
+                    "public_key_base64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+                    "valid_from": NOW,
+                    "valid_until": "2027-08-09T09:00:00Z",
+                }
+                for index, (role, _) in enumerate(roles, start=1)
+            ],
+            "thresholds": [{"role": role, "minimum_signatures": 1} for role, _ in roles],
+            "predicate_roles": [
+                {
+                    "predicate_type": (
+                        f"https://schemas.unasked.dev/attestations/{predicate}/v0.4"
+                    ),
+                    "role": role,
+                }
+                for role, predicate in roles
+            ],
+            "separation": {
+                "unique_public_keys": True,
+                "one_role_per_key": True,
+                "distinct_actor_ids_across_roles": True,
+            },
+        },
+        "authority-authorization-predicate": {
+            **common,
+            "run_id": "RUN-1",
+            "candidate_id": "CANDIDATE-1",
+            "target_snapshot_hash": HASH,
+            "protocol_hash": HASH,
+            "knowledge_boundary_hash": HASH,
+            "context_manifest_hash": HASH,
+            "evidence_bundle_hash": HASH,
+            "ledger_checkpoint_envelope_sha256": HASH,
+            "custody_envelope_sha256": HASH,
+            "isolation_envelope_sha256": HASH,
+            "prepared_graph_sha256": HASH,
+            "decision": "AUTHORIZE_VERIFIED",
+            "authorized_state": "VERIFIED",
+            "expires_at": "2026-08-10T09:00:00Z",
+        },
+        "custody-attestation-predicate": {
+            **common,
+            "suite_id": "SUITE-1",
+            "manifest_sha256": HASH,
+            "case_commitment_sha256": HASH,
+            "sealed_at": NOW,
+            "explorer_development_started_at": "2026-08-10T09:00:00Z",
+            "independent_custody": True,
+            "sealed_before_explorer": True,
+            "hidden_case_count": 7,
+            "positive_case_count": 5,
+            "control_case_count": 2,
+            "explorer_ground_truth_access": False,
+            "evaluator_access": False,
+            "directional_steering": False,
+        },
+        "isolation-attestation-predicate": {
+            **common,
+            "suite_id": "SUITE-1",
+            "case_id": "CASE-1",
+            "variant": variants[0],
+            "run_id": "RUN-1",
+            "started_at": NOW,
+            "completed_at": "2026-08-09T09:01:00Z",
+            "target_snapshot_hash": HASH,
+            "protocol_hash": HASH,
+            "executor_actor_id": "executor-1",
+            "isolation_class": "EXTERNAL_SEALED",
+            "network_mode": "DENY_ALL",
+            "filesystem_mode": "IMMUTABLE_INPUT_ISOLATED_OUTPUT",
+            "input_manifest_sha256": HASH,
+            "command_records_sha256": HASH,
+            "output_manifest_sha256": HASH,
+            "residual_state_detected": False,
+        },
+        "ledger-checkpoint-predicate": {
+            **common,
+            "suite_id": "SUITE-1",
+            "case_id": "CASE-1",
+            "variant": variants[0],
+            "run_id": "RUN-1",
+            "entry_count": 1,
+            "head_event_hash": HASH,
+            "ledger_sha256": HASH,
+            "target_snapshot_hash": HASH,
+            "protocol_hash": HASH,
+            "checkpointed_at": NOW,
+        },
+        "trial-evaluation-predicate": {
+            **common,
+            "suite_id": "SUITE-1",
+            "manifest_sha256": HASH,
+            "protocol_hash": HASH,
+            "custody_envelope_sha256": HASH,
+            "report_sha256": HASH,
+            "evidence_index_sha256": HASH,
+            "audit_sha256": HASH,
+            "run_matrix_sha256": HASH,
+            "run_count": 35,
+            "variant_count": 5,
+            "case_count": 7,
+            "run_bindings": run_bindings,
+            "thresholds": {
+                "positive_cases_required": 3,
+                "positive_cases_total": 5,
+                "control_false_verified_max": 0,
+                "clean_replay_rate_required": "1.000000",
+                "run_count_required": 35,
+                "variant_count_required": 5,
+                "case_count_required": 7,
+            },
+            "observed": {
+                "trusted_verified_positives": 0,
+                "false_verified_controls": 0,
+                "false_verified_claims": 0,
+                "claimed_verified_total": 0,
+                "clean_replay_verified": 0,
+                "context_provenance_complete": False,
+                "target_snapshot_immutable": False,
+                "hidden_inputs_immutable": False,
+                "scoring_policy_immutable": False,
+            },
+            "gates": gates,
+            "status": "NOT_MET",
+        },
+        "m0-certification-predicate": {
+            **common,
+            "suite_id": "SUITE-1",
+            "manifest_sha256": HASH,
+            "protocol_hash": HASH,
+            "custody_envelope_sha256": HASH,
+            "trial_evaluation_envelope_sha256": HASH,
+            "evidence_index_sha256": HASH,
+            "audit_sha256": HASH,
+            "run_matrix_sha256": HASH,
+            "decision": "M0_NOT_DEMONSTRATED",
+            "claim": "M0_NOT_DEMONSTRATED",
+            "limitations": [],
+        },
+    }
+
+
 def actor(role: str, *capabilities: str) -> dict:
     return {
         "actor_id": role.lower().replace("_", "-"),
@@ -382,6 +646,7 @@ def valid_examples() -> dict[str, dict]:
     }
 
     return {
+        **v04_examples(),
         "baseline-result": baseline_result,
         "budget-policy": budget_policy,
         "explorer-action": explorer_action,
@@ -732,9 +997,12 @@ def valid_examples() -> dict[str, dict]:
 
 def test_public_schema_list_is_stable_and_complete() -> None:
     expected = (
+        "authority-authorization-predicate",
+        "authorization-commit",
         "baseline-result",
         "budget-policy",
         "candidate",
+        "custody-attestation-predicate",
         "discovery-certificate",
         "event",
         "evidence-reference",
@@ -744,20 +1012,41 @@ def test_public_schema_list_is_stable_and_complete() -> None:
         "explorer-action",
         "hypothesis",
         "investigation-result",
+        "isolation-attestation-predicate",
         "knowledge-scan",
+        "ledger-checkpoint-predicate",
+        "m0-certification-predicate",
         "observation",
         "replay-result",
         "review",
         "run",
+        "trial-evaluation-predicate",
         "trial-evidence-audit",
         "trial-evidence-index",
         "trial-manifest",
         "trial-preregistration",
         "trial-report",
+        "trial-run-matrix",
+        "trust-policy",
         "verdict",
     )
     assert list_schemas() == expected
     assert set(valid_examples()) == set(expected)
+
+
+def test_attestation_schema_ids_equal_their_exact_predicate_type_uris() -> None:
+    expected = {
+        "authority-authorization-predicate": "authority-authorization",
+        "custody-attestation-predicate": "custody",
+        "isolation-attestation-predicate": "isolation",
+        "ledger-checkpoint-predicate": "ledger-checkpoint",
+        "trial-evaluation-predicate": "trial-evaluation",
+        "m0-certification-predicate": "m0-certification",
+    }
+    for schema_name, predicate_name in expected.items():
+        assert show_schema(schema_name)["$id"] == (
+            f"https://schemas.unasked.dev/attestations/{predicate_name}/v0.4"
+        )
 
 
 @pytest.mark.parametrize("schema_name", list_schemas())

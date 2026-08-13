@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from unasked.cli import main
+from unasked.errors import ConcurrentModificationError
 from unasked.project import Project
 
 
@@ -68,3 +69,56 @@ def test_resources_export_provides_a_wheel_safe_kit(tmp_path: Path, capsys) -> N
     assert payload["data"]["resource_count"] > 0
     assert (destination / "protocols" / "m0-development-v0.1.json").is_file()
     assert (destination / "examples" / "m0-budget.json").is_file()
+
+
+def test_concurrent_modification_uses_reserved_exit_code_7(monkeypatch, capsys) -> None:
+    def fail(_args) -> None:
+        raise ConcurrentModificationError(
+            "Prepared evidence changed before commit.",
+            details={"run_id": "RUN-race"},
+        )
+
+    monkeypatch.setattr("unasked.cli._doctor", fail)
+    exit_code = main(["--json", "doctor"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 7
+    assert payload["error"] == {
+        "code": "CONCURRENT_MODIFICATION",
+        "details": {"run_id": "RUN-race"},
+        "message": "Prepared evidence changed before commit.",
+    }
+
+
+def test_attestations_verify_rejects_unsupported_predicate_before_authority(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    policy_path = tmp_path / "policy.json"
+    envelope_path = tmp_path / "envelope.json"
+    policy_path.write_bytes(b"{}")
+    envelope_path.write_bytes(b"{}")
+
+    class StubPolicy:
+        sha256 = "a" * 64
+
+    monkeypatch.setattr("unasked.cli.load_trust_policy", lambda *_args, **_kwargs: StubPolicy())
+    exit_code = main(
+        [
+            "--json",
+            "attestations",
+            "verify",
+            "--envelope",
+            str(envelope_path),
+            "--predicate-type",
+            "https://attacker.invalid/predicate",
+            "--trust-policy",
+            str(policy_path),
+            "--trust-policy-sha256",
+            "a" * 64,
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 2
+    assert payload["error"]["code"] == "INVALID_INPUT"
+    assert payload["command"] == "attestations verify"

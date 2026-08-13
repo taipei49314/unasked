@@ -2,15 +2,19 @@ from __future__ import annotations
 
 import json
 import platform
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
+from functools import wraps
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from unasked import PROTOCOL_VERSION, __version__
 from unasked.budget import BudgetPolicy
 from unasked.errors import IntegrityError, NotFoundError, PolicyError, UsageError
 from unasked.index import DerivedIndex
 from unasked.ledger import EventLedger
+from unasked.locking import exclusive_file_lock, file_lock_held_by_current_thread
 from unasked.policy import Actor, Capability, State, require_capability, require_transition
 from unasked.protocol import load_protocol, protocol_hash
 from unasked.records import append_jsonl, read_jsonl
@@ -19,6 +23,18 @@ from unasked.schemas import validate_or_raise
 from unasked.util import hash_json, read_json, sha256_file, utc_now, write_json
 
 SCHEMA_VERSION = "0.1.0"
+_T = TypeVar("_T")
+
+
+def _run_mutation(method: Callable[..., _T]) -> Callable[..., _T]:
+    """Keep each public Project mutation inside the run's common lock."""
+
+    @wraps(method)
+    def wrapped(self: Project, run_id: str, *args: Any, **kwargs: Any) -> _T:
+        with self.mutation(run_id):
+            return method(self, run_id, *args, **kwargs)
+
+    return wrapped
 
 
 def _write_once(path: Path, value: dict[str, Any]) -> None:
@@ -293,45 +309,45 @@ class Project:
             raise IntegrityError("Generated run ID already exists.", details={"run_id": run_id})
         run_root.mkdir(parents=True)
         paths = RunPaths(run_root)
-
-        _write_once(paths.target, target)
-        _write_once(paths.protocol, protocol)
-        _write_once(paths.context, context_manifest)
-        _write_once(paths.blindness, blindness)
-        _write_once(paths.knowledge_boundary, knowledge_boundary)
-        if normalized_preregistration is not None and budget_policy is not None:
-            _write_once(paths.trial_preregistration, normalized_preregistration)
-            _write_once(paths.budget_policy, budget_policy.to_dict())
-        _write_once(paths.run, run)
-        paths.discoveries.mkdir()
-        ledger = EventLedger(paths.ledger, run_id=run_id)
-        run_created_payload = {
-            "target_snapshot_hash": snapshot_hash,
-            "protocol_hash": protocol_digest,
-            "context_manifest_hash": context_hash,
-            "knowledge_boundary_hash": knowledge_hash,
-        }
-        if normalized_preregistration is not None and budget_policy is not None:
-            run_created_payload.update(
+        with self.mutation(run_id):
+            _write_once(paths.target, target)
+            _write_once(paths.protocol, protocol)
+            _write_once(paths.context, context_manifest)
+            _write_once(paths.blindness, blindness)
+            _write_once(paths.knowledge_boundary, knowledge_boundary)
+            if normalized_preregistration is not None and budget_policy is not None:
+                _write_once(paths.trial_preregistration, normalized_preregistration)
+                _write_once(paths.budget_policy, budget_policy.to_dict())
+            _write_once(paths.run, run)
+            paths.discoveries.mkdir()
+            run_created_payload = {
+                "target_snapshot_hash": snapshot_hash,
+                "protocol_hash": protocol_digest,
+                "context_manifest_hash": context_hash,
+                "knowledge_boundary_hash": knowledge_hash,
+            }
+            if normalized_preregistration is not None and budget_policy is not None:
+                run_created_payload.update(
+                    {
+                        "trial_preregistration_hash": preregistration_hash,
+                        "budget_policy_hash": budget_policy.sha256,
+                    }
+                )
+            self.append_event(
+                run_id,
+                "RUN_CREATED",
+                run_created_payload,
+                actor=_event_actor(actor),
+            )
+            self.index.upsert_run(
                 {
-                    "trial_preregistration_hash": preregistration_hash,
-                    "budget_policy_hash": budget_policy.sha256,
+                    "run_id": run_id,
+                    "created_at": frozen_at,
+                    "target_commit": snapshot["commit"],
+                    "protocol_hash": protocol_digest,
+                    "status": "CREATED",
                 }
             )
-        ledger.append(
-            "RUN_CREATED",
-            run_created_payload,
-            actor=_event_actor(actor),
-        )
-        self.index.upsert_run(
-            {
-                "run_id": run_id,
-                "created_at": frozen_at,
-                "target_commit": snapshot["commit"],
-                "protocol_hash": protocol_digest,
-                "status": "CREATED",
-            }
-        )
         return run
 
     def get_run(self, run_id: str) -> dict[str, Any]:
@@ -445,6 +461,49 @@ class Project:
     def ledger(self, run_id: str) -> EventLedger:
         return EventLedger(self.paths(run_id).ledger, run_id=run_id)
 
+    def mutation_lock_path(self, run_id: str) -> Path:
+        return self.paths(run_id).root / ".mutation.lock"
+
+    @contextmanager
+    def mutation(self, run_id: str) -> Iterator[None]:
+        """Serialize all cooperating mutations of one run evidence graph."""
+
+        with exclusive_file_lock(self.mutation_lock_path(run_id)):
+            yield
+
+    def assert_mutation_locked(self, run_id: str) -> None:
+        if not file_lock_held_by_current_thread(self.mutation_lock_path(run_id)):
+            raise IntegrityError(
+                "A run mutation was attempted without the common mutation lock.",
+                details={"run_id": run_id},
+            )
+
+    @_run_mutation
+    def append_event(
+        self,
+        run_id: str,
+        event_type: str,
+        payload: Mapping[str, Any] | None = None,
+        *,
+        actor: str | Mapping[str, Any] = "system",
+        role: str = "SYSTEM",
+        capabilities: Sequence[str] = (),
+        occurred_at: str | None = None,
+        artifact_refs: Sequence[Mapping[str, Any]] = (),
+    ) -> dict[str, Any]:
+        """Append a run event while preserving mutation-lock-before-ledger-lock order."""
+
+        return self.ledger(run_id).append(
+            event_type,
+            payload,
+            actor=actor,
+            role=role,
+            capabilities=capabilities,
+            occurred_at=occurred_at,
+            artifact_refs=artifact_refs,
+        )
+
+    @_run_mutation
     def append_record(
         self,
         run_id: str,
@@ -482,7 +541,8 @@ class Project:
                 details={"collection": collection, "run_id": run_id},
             )
         enriched = append_jsonl(destination, record)
-        self.ledger(run_id).append(
+        self.append_event(
+            run_id,
             event_type,
             {
                 "collection": collection,
@@ -524,6 +584,7 @@ class Project:
             )
         return path
 
+    @_run_mutation
     def create_candidate(
         self,
         run_id: str,
@@ -592,7 +653,8 @@ class Project:
             reason="Falsifiable hypothesis and benign alternative registered.",
             current=State.CANDIDATE,
         )
-        self.ledger(run_id).append(
+        self.append_event(
+            run_id,
             "CANDIDATE_PROPOSED",
             {
                 "candidate_id": candidate["candidate_id"],
@@ -612,6 +674,7 @@ class Project:
             raise IntegrityError("Candidate has no state history.")
         return State(records[-1]["to"])
 
+    @_run_mutation
     def transition_candidate(
         self,
         run_id: str,
@@ -654,6 +717,7 @@ class Project:
             evidence_sha256=evidence_sha256,
         )
 
+    @_run_mutation
     def authorize_verified(
         self,
         run_id: str,
@@ -727,7 +791,8 @@ class Project:
         }
         if evidence_sha256 is not None:
             transition_payload["evidence_sha256"] = evidence_sha256
-        self.ledger(run_id).append(
+        self.append_event(
+            run_id,
             "STATE_TRANSITION",
             transition_payload,
             actor=_event_actor(actor),
@@ -740,6 +805,7 @@ class Project:
         )
         return record
 
+    @_run_mutation
     def write_candidate_artifact(
         self,
         run_id: str,
@@ -758,7 +824,8 @@ class Project:
         destination = self.candidate_dir(run_id, candidate_id) / relative_path
         _write_once(destination, value)
         digest = sha256_file(destination)
-        self.ledger(run_id).append(
+        self.append_event(
+            run_id,
             event_type,
             {
                 "candidate_id": candidate_id,
@@ -769,6 +836,7 @@ class Project:
         )
         return {"path": str(destination), "sha256": digest}
 
+    @_run_mutation
     def write_run_artifact(
         self,
         run_id: str,
@@ -786,13 +854,15 @@ class Project:
         destination = self.paths(run_id).root / relative_path
         _write_once(destination, value)
         digest = sha256_file(destination)
-        self.ledger(run_id).append(
+        self.append_event(
+            run_id,
             event_type,
             {"path": relative_path.replace("\\", "/"), "sha256": digest},
             actor=_event_actor(actor),
         )
         return {"path": str(destination), "sha256": digest}
 
+    @_run_mutation
     def append_candidate_record(
         self,
         run_id: str,
@@ -807,7 +877,8 @@ class Project:
             raise PolicyError("Candidate record path escapes its bundle.")
         destination = self.candidate_dir(run_id, candidate_id) / relative_path
         enriched = append_jsonl(destination, record)
-        self.ledger(run_id).append(
+        self.append_event(
+            run_id,
             event_type,
             {
                 "candidate_id": candidate_id,

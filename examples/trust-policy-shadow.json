@@ -1,0 +1,89 @@
+{
+  "schema_version": "0.4.0",
+  "policy_id": "UNASKED-PUBLIC-SHADOW-ONLY",
+  "mode": "SHADOW",
+  "issued_at": "2026-08-13T00:00:00Z",
+  "valid_from": "2026-08-13T00:00:00Z",
+  "valid_until": "2030-01-01T00:00:00Z",
+  "algorithm": "Ed25519",
+  "dsse_payload_type": "application/vnd.in-toto+json",
+  "statement_type": "https://in-toto.io/Statement/v1",
+  "purpose": "Public interoperability example only. These public SHADOW keys carry no production authority.",
+  "keys": [
+    {
+      "key_id": "shadow-discovery-authority",
+      "actor_id": "shadow-actor-authority",
+      "role": "DISCOVERY_AUTHORITY",
+      "status": "ACTIVE",
+      "public_key_base64": "LDBDaVXZMpJCBJEljkljkagZ1cJM0doL3PlBVpEPips=",
+      "valid_from": "2026-08-13T00:00:00Z",
+      "valid_until": "2030-01-01T00:00:00Z"
+    },
+    {
+      "key_id": "shadow-custodian",
+      "actor_id": "shadow-actor-custodian",
+      "role": "CUSTODIAN",
+      "status": "ACTIVE",
+      "public_key_base64": "APHG/qdxBudkjufAkrVtJWoZOstBLh7uZ0J5QBGeX24=",
+      "valid_from": "2026-08-13T00:00:00Z",
+      "valid_until": "2030-01-01T00:00:00Z"
+    },
+    {
+      "key_id": "shadow-isolation-attester",
+      "actor_id": "shadow-actor-isolation",
+      "role": "ISOLATION_ATTESTER",
+      "status": "ACTIVE",
+      "public_key_base64": "Op4vnWDdjCObEWZ6yo+W2R8mSBghe/QYJsxeKCYWbWo=",
+      "valid_from": "2026-08-13T00:00:00Z",
+      "valid_until": "2030-01-01T00:00:00Z"
+    },
+    {
+      "key_id": "shadow-ledger-witness",
+      "actor_id": "shadow-actor-ledger",
+      "role": "LEDGER_WITNESS",
+      "status": "ACTIVE",
+      "public_key_base64": "VyZyUiHbUqRup7HY4LNm1Avrl6gOSEbnF6Q+vRT9WX8=",
+      "valid_from": "2026-08-13T00:00:00Z",
+      "valid_until": "2030-01-01T00:00:00Z"
+    },
+    {
+      "key_id": "shadow-trial-evaluator",
+      "actor_id": "shadow-actor-evaluator",
+      "role": "TRIAL_EVALUATOR",
+      "status": "ACTIVE",
+      "public_key_base64": "sp+o5HssrHDy0kju6ZzCrqC8ZuJmWBW4fW1IqC/sE3c=",
+      "valid_from": "2026-08-13T00:00:00Z",
+      "valid_until": "2030-01-01T00:00:00Z"
+    },
+    {
+      "key_id": "shadow-m0-certifier",
+      "actor_id": "shadow-actor-certifier",
+      "role": "M0_CERTIFIER",
+      "status": "ACTIVE",
+      "public_key_base64": "vqlIMBNCbkhjW8uun+d4XUe6lVgN8gjmgOwhrYbmgj0=",
+      "valid_from": "2026-08-13T00:00:00Z",
+      "valid_until": "2030-01-01T00:00:00Z"
+    }
+  ],
+  "thresholds": [
+    {"role": "DISCOVERY_AUTHORITY", "minimum_signatures": 1},
+    {"role": "CUSTODIAN", "minimum_signatures": 1},
+    {"role": "ISOLATION_ATTESTER", "minimum_signatures": 1},
+    {"role": "LEDGER_WITNESS", "minimum_signatures": 1},
+    {"role": "TRIAL_EVALUATOR", "minimum_signatures": 1},
+    {"role": "M0_CERTIFIER", "minimum_signatures": 1}
+  ],
+  "predicate_roles": [
+    {"predicate_type": "https://schemas.unasked.dev/attestations/authority-authorization/v0.4", "role": "DISCOVERY_AUTHORITY"},
+    {"predicate_type": "https://schemas.unasked.dev/attestations/custody/v0.4", "role": "CUSTODIAN"},
+    {"predicate_type": "https://schemas.unasked.dev/attestations/isolation/v0.4", "role": "ISOLATION_ATTESTER"},
+    {"predicate_type": "https://schemas.unasked.dev/attestations/ledger-checkpoint/v0.4", "role": "LEDGER_WITNESS"},
+    {"predicate_type": "https://schemas.unasked.dev/attestations/trial-evaluation/v0.4", "role": "TRIAL_EVALUATOR"},
+    {"predicate_type": "https://schemas.unasked.dev/attestations/m0-certification/v0.4", "role": "M0_CERTIFIER"}
+  ],
+  "separation": {
+    "unique_public_keys": true,
+    "one_role_per_key": true,
+    "distinct_actor_ids_across_roles": true
+  }
+}

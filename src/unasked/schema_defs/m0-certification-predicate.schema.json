@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://schemas.unasked.dev/attestations/m0-certification/v0.4",
+  "title": "UNASKED M0 certification predicate", "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "predicate_id", "issued_at", "issuer_actor_id", "trust_policy_sha256", "suite_id", "manifest_sha256", "protocol_hash", "custody_envelope_sha256", "trial_evaluation_envelope_sha256", "evidence_index_sha256", "audit_sha256", "run_matrix_sha256", "decision", "claim", "limitations"],
+  "properties": {
+    "schema_version": {"const": "0.4.0"}, "predicate_id": {"$ref": "#/$defs/id"}, "issued_at": {"$ref": "#/$defs/time"}, "issuer_actor_id": {"$ref": "#/$defs/id"}, "trust_policy_sha256": {"$ref": "#/$defs/hash"},
+    "suite_id": {"$ref": "#/$defs/id"}, "manifest_sha256": {"$ref": "#/$defs/hash"}, "protocol_hash": {"$ref": "#/$defs/hash"}, "custody_envelope_sha256": {"$ref": "#/$defs/hash"}, "trial_evaluation_envelope_sha256": {"$ref": "#/$defs/hash"}, "evidence_index_sha256": {"$ref": "#/$defs/hash"}, "audit_sha256": {"$ref": "#/$defs/hash"}, "run_matrix_sha256": {"$ref": "#/$defs/hash"}, "decision": {"enum": ["M0_DEMONSTRATED", "M0_NOT_DEMONSTRATED"]}, "claim": {"type": "string", "minLength": 1}, "limitations": {"type": "array", "maxItems": 64, "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
+  },
+  "allOf": [
+    {"if": {"properties": {"decision": {"const": "M0_DEMONSTRATED"}}, "required": ["decision"]}, "then": {"properties": {"claim": {"const": "Demonstrated blind discovery of reproducible discrepancies on a sealed evaluation set."}}}, "else": {"properties": {"claim": {"const": "M0_NOT_DEMONSTRATED"}}}}
+  ],
+  "$defs": {"id": {"$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier"}, "hash": {"$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256"}, "time": {"$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/timestamp"}}
+}

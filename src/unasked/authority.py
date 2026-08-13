@@ -1,11 +1,21 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import os
+import stat
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from functools import wraps
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from unasked.artifacts import ArtifactMetadata, ArtifactStore
-from unasked.errors import PolicyError
+from unasked.attestations import (
+    verify_custody_attestation,
+    verify_isolation_attestation,
+    verify_ledger_checkpoint,
+)
+from unasked.errors import ConcurrentModificationError, IntegrityError, PolicyError, UsageError
 from unasked.observer import observe_repository
 from unasked.outcomes import classify_outcome
 from unasked.policy import (
@@ -20,8 +30,31 @@ from unasked.project import SCHEMA_VERSION, Project
 from unasked.protocol import AUTHORIZATION_GATES
 from unasked.records import read_jsonl
 from unasked.schemas import validate_or_raise
-from unasked.util import canonical_json, hash_json, read_json, sha256_file, utc_now
+from unasked.trust import load_trust_policy, parse_strict_json, verify_dsse_statement
+from unasked.util import (
+    canonical_json,
+    hash_json,
+    read_json,
+    sha256_bytes,
+    sha256_file,
+    utc_now,
+)
 from unasked.workflow import capture_executions_complete
+
+_T = TypeVar("_T")
+
+
+def _consistent_authority_read(method: Callable[..., _T]) -> Callable[..., _T]:
+    """Take a coherent graph snapshot under the common run mutation lock."""
+
+    @wraps(method)
+    def wrapped(
+        self: AuthorityKernel, run_id: str, candidate_id: str, *args: Any, **kwargs: Any
+    ) -> _T:
+        with self.project.mutation(run_id):
+            return method(self, run_id, candidate_id, *args, **kwargs)
+
+    return wrapped
 
 
 @dataclass(frozen=True)
@@ -37,6 +70,111 @@ class GateReport:
             "checks": self.checks,
             "detailed_checks": self.detailed_checks,
             "reasons": list(self.reasons),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class AuthorizationRequest:
+    schema_version: str
+    run_id: str
+    candidate_id: str
+    source_state: str
+    target_state: str
+    prepared_graph_sha256: str
+    evidence_bundle_hash: str
+    target_snapshot_hash: str
+    protocol_hash: str
+    knowledge_boundary_hash: str
+    context_manifest_hash: str
+    ledger: dict[str, Any]
+    trust_policy_sha256: str
+    checkpoint_envelope_sha256: str
+    custody_envelope_sha256: str
+    isolation_envelope_sha256: str
+    required_predicate_type: str
+    generated_at: str
+    _graph_bytes: bytes = field(repr=False)
+    _evidence_manifest_bytes: bytes = field(repr=False)
+    _file_preimages: tuple[tuple[str, str, bytes], ...] = field(repr=False)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "run_id": self.run_id,
+            "candidate_id": self.candidate_id,
+            "source_state": self.source_state,
+            "target_state": self.target_state,
+            "prepared_graph_sha256": self.prepared_graph_sha256,
+            "evidence_bundle_hash": self.evidence_bundle_hash,
+            "target_snapshot_hash": self.target_snapshot_hash,
+            "protocol_hash": self.protocol_hash,
+            "knowledge_boundary_hash": self.knowledge_boundary_hash,
+            "context_manifest_hash": self.context_manifest_hash,
+            "ledger": dict(self.ledger),
+            "trust_policy_sha256": self.trust_policy_sha256,
+            "checkpoint_envelope_sha256": self.checkpoint_envelope_sha256,
+            "custody_envelope_sha256": self.custody_envelope_sha256,
+            "isolation_envelope_sha256": self.isolation_envelope_sha256,
+            "required_predicate_type": self.required_predicate_type,
+            "generated_at": self.generated_at,
+        }
+
+    @property
+    def prepared_graph_bytes(self) -> bytes:
+        return self._graph_bytes
+
+    @property
+    def evidence_manifest_bytes(self) -> bytes:
+        return self._evidence_manifest_bytes
+
+    @property
+    def file_preimages(self) -> tuple[tuple[str, str, bytes], ...]:
+        return self._file_preimages
+
+    def stable_dict(self) -> dict[str, Any]:
+        value = self.to_dict()
+        value.pop("generated_at")
+        return value
+
+    def signing_request(self) -> dict[str, Any]:
+        return {
+            **self.stable_dict(),
+            "subject": {
+                "digest": {"sha256": self.prepared_graph_sha256},
+                "media_type": "application/vnd.unasked.authorization-graph+json",
+            },
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedAuthorization:
+    request: AuthorizationRequest
+    authority_envelope_sha256: str
+    authority_payload_sha256: str
+    checkpoint_envelope_sha256: str
+    checkpoint_payload_sha256: str
+    custody_envelope_sha256: str
+    custody_payload_sha256: str
+    isolation_envelope_sha256: str
+    isolation_payload_sha256: str
+    stable_file_descriptors: tuple[tuple[str, str, int, int, int, int, int, int, int], ...]
+    _gate_report: GateReport = field(repr=False)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "request": self.request.to_dict(),
+            "authority_envelope_sha256": self.authority_envelope_sha256,
+            "authority_payload_sha256": self.authority_payload_sha256,
+            "checkpoint_envelope_sha256": self.checkpoint_envelope_sha256,
+            "checkpoint_payload_sha256": self.checkpoint_payload_sha256,
+            "custody_envelope_sha256": self.custody_envelope_sha256,
+            "custody_payload_sha256": self.custody_payload_sha256,
+            "isolation_envelope_sha256": self.isolation_envelope_sha256,
+            "isolation_payload_sha256": self.isolation_payload_sha256,
+            "stable_file_descriptors": [
+                {"path": descriptor[0], "sha256": descriptor[1], "size": descriptor[2]}
+                for descriptor in self.stable_file_descriptors
+            ],
         }
 
 
@@ -165,6 +303,40 @@ def _expected_run_created_payload(run: dict[str, Any], target: dict[str, Any]) -
     return payload
 
 
+def _parse_time(value: str, field_name: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (AttributeError, ValueError) as exc:
+        raise UsageError(f"{field_name} must be an RFC 3339 timestamp.") from exc
+    if parsed.tzinfo is None:
+        raise UsageError(f"{field_name} must include a timezone.")
+    return parsed.astimezone(UTC)
+
+
+def _selected_time(value: datetime | str | None) -> datetime:
+    if value is None:
+        return datetime.now(UTC)
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            raise UsageError("now must be timezone-aware.")
+        return value.astimezone(UTC)
+    return _parse_time(value, "now")
+
+
+def _require_subject_sha256(statement: dict[str, Any], expected_bytes: bytes) -> None:
+    subjects = statement.get("subject")
+    if not isinstance(subjects, list) or len(subjects) != 1 or not isinstance(subjects[0], dict):
+        raise IntegrityError("Authority Statement must contain exactly one subject.")
+    digest = subjects[0].get("digest")
+    actual = digest.get("sha256") if isinstance(digest, dict) else None
+    expected = sha256_bytes(expected_bytes)
+    if actual != expected:
+        raise IntegrityError(
+            "Authority Statement subject is not the prepared graph.",
+            details={"expected": expected, "actual": actual},
+        )
+
+
 class AuthorityKernel:
     """Deterministic evidence-authorization checks; it does not infer world truth."""
 
@@ -172,12 +344,350 @@ class AuthorityKernel:
         self.project = project
         self.store = ArtifactStore(project.artifacts_root)
 
+    def _stable_evidence_read(
+        self, path: Path, logical_name: str
+    ) -> tuple[bytes, tuple[str, str, int, int, int, int, int, int, int]]:
+        """Read one regular in-project file without following a symlink/reparse point."""
+
+        project_root = self.project.root.resolve()
+        try:
+            relative = path.absolute().relative_to(project_root)
+        except ValueError as exc:
+            raise IntegrityError("Authorization evidence path escapes the project root.") from exc
+        cursor = project_root
+        for part in relative.parts:
+            cursor = cursor / part
+            try:
+                metadata = cursor.lstat()
+            except OSError as exc:
+                raise IntegrityError(
+                    "Authorization evidence file is missing or unreadable.",
+                    details={"path": logical_name},
+                ) from exc
+            attributes = int(getattr(metadata, "st_file_attributes", 0))
+            if stat.S_ISLNK(metadata.st_mode) or attributes & 0x400:
+                raise IntegrityError(
+                    "Authorization evidence path contains a symlink or reparse point.",
+                    details={"path": logical_name},
+                )
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, flags)
+        try:
+            before = path.lstat()
+            opened = os.fstat(descriptor)
+            attributes = int(getattr(opened, "st_file_attributes", 0))
+            reparse_tag = int(getattr(opened, "st_reparse_tag", 0))
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or attributes & 0x400
+                or (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino)
+            ):
+                raise IntegrityError(
+                    "Authorization evidence changed identity or is not a regular file.",
+                    details={"path": logical_name},
+                )
+            chunks: list[bytes] = []
+            while chunk := os.read(descriptor, 1024 * 1024):
+                chunks.append(chunk)
+            after = os.fstat(descriptor)
+            if (
+                opened.st_size,
+                opened.st_mtime_ns,
+                opened.st_dev,
+                opened.st_ino,
+            ) != (after.st_size, after.st_mtime_ns, after.st_dev, after.st_ino):
+                raise IntegrityError(
+                    "Authorization evidence changed while it was being read.",
+                    details={"path": logical_name},
+                )
+            raw = b"".join(chunks)
+            return raw, (
+                logical_name,
+                sha256_bytes(raw),
+                len(raw),
+                int(after.st_dev),
+                int(after.st_ino),
+                int(after.st_mode),
+                int(after.st_mtime_ns),
+                attributes,
+                reparse_tag,
+            )
+        finally:
+            os.close(descriptor)
+
+    def _authorization_graph(
+        self,
+        run_id: str,
+        candidate_id: str,
+    ) -> tuple[
+        bytes,
+        tuple[tuple[str, str, int, int, int, int, int, int, int], ...],
+        tuple[tuple[str, str, bytes], ...],
+        bytes,
+        str,
+        dict[str, Any],
+    ]:
+        if self.project.current_state(run_id, candidate_id) is not State.REPRODUCED:
+            raise PolicyError("Authorization preparation requires source state REPRODUCED.")
+        root = self.project.candidate_dir(run_id, candidate_id)
+        candidate_files = {
+            "candidate": root / "candidate.json",
+            "hypothesis": root / "hypothesis.json",
+            "experiment_plan": root / "experiment" / "plan.json",
+            "experiment_result": root / "experiment" / "result.json",
+            "experiment_environment": root / "experiment" / "environment.json",
+            "counterevidence_review": root / "counterevidence" / "review.json",
+            "replay_result": root / "replay" / "result.json",
+            "replay_environment": root / "replay" / "environment.json",
+            "novelty_review": root / "novelty.json",
+            "known_issue_review": root / "known-issue.json",
+            "materiality_review": root / "materiality.json",
+            "state_history": root / "states.jsonl",
+        }
+        run_files = _run_evidence_files(self.project, run_id)
+        collection_files = {
+            "observations": self.project.paths(run_id).observations,
+            "expectations": self.project.paths(run_id).expectations,
+        }
+        paths = {**candidate_files, **{f"run_{k}": v for k, v in run_files.items()}}
+        paths.update(collection_files)
+        descriptors: list[tuple[str, str, int, int, int, int, int, int, int]] = []
+        preimages: list[tuple[str, str, bytes]] = []
+        raw_by_name: dict[str, bytes] = {}
+        referenced: set[str] = set()
+        for name, path in sorted(paths.items()):
+            raw, descriptor = self._stable_evidence_read(path, name)
+            descriptors.append(descriptor)
+            preimages.append((name, descriptor[1], raw))
+            raw_by_name[name] = raw
+            if path.suffix == ".json":
+                document = parse_strict_json(raw)
+                referenced.update(ref["sha256"] for ref in _cas_references(document))
+                if isinstance(document, dict):
+                    referenced.update(document.get("evidence_hashes", []))
+        for digest in sorted(referenced):
+            report = self.store.verify(digest)
+            report.raise_for_error()
+            resolved_cas = report.path.resolve()
+            artifacts_root = self.project.artifacts_root.resolve()
+            if artifacts_root not in resolved_cas.parents:
+                raise IntegrityError("Verified CAS object escapes the project artifact root.")
+            raw, descriptor = self._stable_evidence_read(report.path, f"cas:{digest}")
+            descriptors.append(descriptor)
+            preimages.append((f"cas:{digest}", descriptor[1], raw))
+        run = self.project.get_run(run_id)
+        target = self.project.get_target(run_id)
+        ledger_path = self.project.paths(run_id).ledger
+        ledger_bytes, _ = self._stable_evidence_read(ledger_path, "ledger")
+        ledger_report = self.project.ledger(run_id).verify(raise_on_error=True)
+        ledger = {
+            "entries": ledger_report.entries,
+            "last_hash": ledger_report.last_hash,
+            "sha256": sha256_bytes(ledger_bytes),
+        }
+        graph = {
+            "schema_version": "0.4.0",
+            "run_id": run_id,
+            "candidate_id": candidate_id,
+            "source_state": "REPRODUCED",
+            "target_state": "VERIFIED",
+            "target_snapshot_hash": target["snapshot_hash"],
+            "protocol_hash": run["protocol"]["sha256"],
+            "knowledge_boundary_hash": run["knowledge_boundary_hash"],
+            "context_manifest_hash": run["context_manifest_hash"],
+            "ledger": ledger,
+            "files": [
+                {
+                    "path": descriptor[0],
+                    "sha256": descriptor[1],
+                    "artifact_sha256": descriptor[1],
+                    "size": descriptor[2],
+                }
+                for descriptor in descriptors
+            ],
+        }
+
+        def reference(raw: bytes, *, media_type: str = "application/json") -> dict[str, Any]:
+            digest = sha256_bytes(raw)
+            return {
+                "artifact_id": f"sha256:{digest}",
+                "sha256": digest,
+                "uri": f"cas://sha256/{digest}",
+                "media_type": media_type,
+                "size_bytes": len(raw),
+            }
+
+        candidate = parse_strict_json(raw_by_name["candidate"])
+
+        def jsonl_records(name: str) -> dict[str, dict[str, Any]]:
+            values: dict[str, dict[str, Any]] = {}
+            identifier_field = "expectation_id" if name == "expectations" else "observation_id"
+            for line in raw_by_name[name].splitlines():
+                if not line:
+                    continue
+                document = parse_strict_json(line)
+                values[document[identifier_field]] = _without_record_hash(document)
+            return values
+
+        expectations = jsonl_records("expectations")
+        observations = jsonl_records("observations")
+        expectation_references = [
+            reference(canonical_json(expectations[identifier]))
+            for identifier in candidate["expectation_ids"]
+        ]
+        observation_references = [
+            reference(canonical_json(observations[identifier]))
+            for identifier in candidate["observation_ids"]
+        ]
+        referenced_artifacts = [
+            self.store.get_metadata(digest).to_reference() for digest in sorted(referenced)
+        ]
+        evidence_manifest = {
+            "schema_version": SCHEMA_VERSION,
+            "run_id": run_id,
+            "candidate_id": candidate_id,
+            "target_snapshot_hash": target["snapshot_hash"],
+            "protocol_hash": run["protocol"]["sha256"],
+            "ledger_last_hash": ledger["last_hash"],
+            "files": {
+                name: reference(raw_by_name[name])
+                for name in candidate_files
+                if name != "state_history"
+            },
+            "run_files": {name: reference(raw_by_name[f"run_{name}"]) for name in run_files},
+            "expectations": expectation_references,
+            "observations": observation_references,
+            "referenced_artifacts": referenced_artifacts,
+        }
+        evidence_manifest_bytes = canonical_json(evidence_manifest)
+        graph_bytes = canonical_json(graph)
+        evidence_bundle_hash = sha256_bytes(evidence_manifest_bytes)
+        return (
+            graph_bytes,
+            tuple(descriptors),
+            tuple(preimages),
+            evidence_manifest_bytes,
+            evidence_bundle_hash,
+            ledger,
+        )
+
+    @_consistent_authority_read
+    def build_authorization_request(
+        self,
+        run_id: str,
+        candidate_id: str,
+        *,
+        trust_policy_sha256: str,
+        checkpoint_envelope_sha256: str,
+        custody_envelope_sha256: str,
+        isolation_envelope_sha256: str,
+        generated_at: str | None = None,
+    ) -> AuthorizationRequest:
+        """Pure-read deterministic request for external authority/checkpoint signing."""
+
+        graph_bytes, _, preimages, evidence_manifest_bytes, evidence_bundle_hash, ledger = (
+            self._authorization_graph(run_id, candidate_id)
+        )
+        graph = parse_strict_json(graph_bytes)
+        graph["external_attestations"] = {
+            "trust_policy_sha256": trust_policy_sha256,
+            "checkpoint_envelope_sha256": checkpoint_envelope_sha256,
+            "custody_envelope_sha256": custody_envelope_sha256,
+            "isolation_envelope_sha256": isolation_envelope_sha256,
+        }
+        graph_bytes = canonical_json(graph)
+        run = self.project.get_run(run_id)
+        target = self.project.get_target(run_id)
+        return AuthorizationRequest(
+            schema_version="0.4.0",
+            run_id=run_id,
+            candidate_id=candidate_id,
+            source_state="REPRODUCED",
+            target_state="VERIFIED",
+            prepared_graph_sha256=sha256_bytes(graph_bytes),
+            evidence_bundle_hash=evidence_bundle_hash,
+            target_snapshot_hash=target["snapshot_hash"],
+            protocol_hash=run["protocol"]["sha256"],
+            knowledge_boundary_hash=run["knowledge_boundary_hash"],
+            context_manifest_hash=run["context_manifest_hash"],
+            ledger=ledger,
+            trust_policy_sha256=trust_policy_sha256,
+            checkpoint_envelope_sha256=checkpoint_envelope_sha256,
+            custody_envelope_sha256=custody_envelope_sha256,
+            isolation_envelope_sha256=isolation_envelope_sha256,
+            required_predicate_type=(
+                "https://schemas.unasked.dev/attestations/authority-authorization/v0.4"
+            ),
+            generated_at=generated_at or utc_now(),
+            _graph_bytes=graph_bytes,
+            _evidence_manifest_bytes=evidence_manifest_bytes,
+            _file_preimages=preimages,
+        )
+
+    def _require_production_actor_separation(
+        self,
+        run_id: str,
+        candidate_id: str,
+        *,
+        authority: Actor,
+        custody: Any,
+        isolation: Any,
+        checkpoint: Any,
+        signed_authority: Any,
+    ) -> None:
+        """Keep external trust roles separate from every evidence-producing actor."""
+
+        root = self.project.candidate_dir(run_id, candidate_id)
+        bundle = self.project.read_candidate(run_id, candidate_id)
+        experiment = read_json(root / "experiment" / "result.json")
+        replay = read_json(root / "replay" / "result.json")
+        proposer_id = bundle["candidate"]["proposed_by"]["actor_id"]
+        executor_id = experiment["executor"]["actor_id"]
+        reproducer_id = replay["reproducer"]["actor_id"]
+        falsifier_id = read_json(root / "counterevidence" / "review.json")["reviewer"]["actor_id"]
+        core_evidence_actors = (proposer_id, executor_id, falsifier_id, reproducer_id)
+        if len(set(core_evidence_actors)) != len(core_evidence_actors):
+            raise PolicyError(
+                "Explorer, executor, falsifier, and reproducer must be pairwise distinct."
+            )
+        reviewer_ids = {
+            read_json(path)["reviewer"]["actor_id"]
+            for path in (
+                root / "counterevidence" / "review.json",
+                root / "novelty.json",
+                root / "known-issue.json",
+                root / "materiality.json",
+            )
+        }
+        evidence_producers = {*core_evidence_actors, *reviewer_ids}
+        custodian_ids = set(custody.signer_actor_ids)
+        isolation_ids = set(isolation.signer_actor_ids)
+        witness_ids = set(checkpoint.signer_actor_ids)
+        authority_ids = set(signed_authority.signer_actor_ids)
+        if (
+            custodian_ids & (evidence_producers | authority_ids)
+            or isolation_ids & (evidence_producers | authority_ids)
+            or witness_ids & (evidence_producers | authority_ids | custodian_ids | isolation_ids)
+        ):
+            raise PolicyError("Production trust roles are not separated from evidence producers.")
+        if (
+            authority_ids & (evidence_producers | custodian_ids | isolation_ids | witness_ids)
+            or authority.actor_id not in authority_ids
+        ):
+            raise PolicyError("Authority signer is not separated from evidence participants.")
+        if signed_authority.predicate["issuer_actor_id"] not in authority_ids:
+            raise IntegrityError("Authority predicate issuer is not an authenticated signer.")
+        if isolation.predicate["executor_actor_id"] != reproducer_id:
+            raise IntegrityError("Isolation executor is not the replay evidence producer.")
+
     def evaluate(
         self,
         run_id: str,
         candidate_id: str,
         *,
         authority: Actor,
+        _authenticated_custody: bool = False,
+        _authenticated_isolation: bool = False,
     ) -> GateReport:
         require_capability(authority, Capability.AUTHORIZE_VERDICT)
         run = self.project.get_run(run_id)
@@ -201,10 +711,15 @@ class AuthorityKernel:
                 blindness.get("hidden_ground_truth_access") is False,
                 blindness.get("evaluator_access") is False,
                 blindness.get("human_steering_count") == 0,
-                custody.get("sealed_before_explorer") is True,
-                custody.get("explorer_ground_truth_access") is False,
-                custody.get("directional_steering") is False,
-                custody.get("custodian", {}).get("actor_id") != proposer_id,
+                _authenticated_custody
+                or all(
+                    (
+                        custody.get("sealed_before_explorer") is True,
+                        custody.get("explorer_ground_truth_access") is False,
+                        custody.get("directional_steering") is False,
+                        custody.get("custodian", {}).get("actor_id") != proposer_id,
+                    )
+                ),
             )
         )
 
@@ -432,21 +947,27 @@ class AuthorityKernel:
         except Exception:
             replay_outputs_bound = False
 
-        # External receipt bundles are retained as evidence, but the released
-        # verifier has no independently configured signature trust root yet.
+        # The legacy gate evaluator accepts no externally pinned trust policy.
+        # External receipt bundles are retained as evidence, but this local path
+        # must not infer authentication from their contents or CAS presence.
         # Treating self-declared issuer strings or CAS presence as authentication
         # would allow the evidence producer to authorize itself.
-        external_isolation_attested = False
+        external_isolation_attested = _authenticated_isolation
+        execution_isolation_bound = external_isolation_attested or all(
+            (
+                replay_environment.get("fresh_git_worktree") is True,
+                replay_environment.get("network_isolated") is True,
+                replay_environment.get("secret_isolation") == "enforced",
+                bool(limits) and all(value is True for value in limits.values()),
+            )
+        )
         clean_replay_passed = all(
             (
                 replay.get("status") == "PASS",
                 replay.get("core_result_match") is True,
                 replay.get("clean_environment") is True,
                 replay.get("residual_state_detected") is False,
-                replay_environment.get("fresh_git_worktree") is True,
-                replay_environment.get("network_isolated") is True,
-                replay_environment.get("secret_isolation") == "enforced",
-                bool(limits) and all(value is True for value in limits.values()),
+                execution_isolation_bound,
                 replay_input_bound,
                 replay_outputs_bound,
                 external_isolation_attested,
@@ -675,27 +1196,393 @@ class AuthorityKernel:
     def _store_json_file(self, path: Path, *, schema_name: str | None = None) -> ArtifactMetadata:
         return self.store.put_file(path, media_type="application/json", original_name=path.name)
 
+    @_consistent_authority_read
+    def prepare_authorization(
+        self,
+        run_id: str,
+        candidate_id: str,
+        *,
+        authority: Actor,
+        authority_envelope_bytes: bytes,
+        checkpoint_envelope_bytes: bytes,
+        custody_envelope_bytes: bytes,
+        isolation_envelope_bytes: bytes,
+        trust_policy_bytes: bytes,
+        trust_policy_sha256: str,
+        manifest_bytes: bytes,
+        isolation_result_bytes: bytes,
+        now: datetime | str | None = None,
+    ) -> PreparedAuthorization:
+        """Pure-read verification of a complete externally authenticated authorization."""
+
+        require_capability(authority, Capability.AUTHORIZE_VERDICT)
+        run = self.project.get_run(run_id)
+        target = self.project.get_target(run_id)
+        binding = run.get("trial_binding")
+        if not isinstance(binding, dict):
+            raise PolicyError("Authority v2 requires a preregistered trial run.")
+        replay_path = self.project.candidate_dir(run_id, candidate_id) / "replay" / "result.json"
+        current_replay_bytes, _ = self._stable_evidence_read(replay_path, "replay_result_subject")
+        if current_replay_bytes != isolation_result_bytes:
+            raise IntegrityError("Isolation subject bytes are not the current replay result bytes.")
+        policy = load_trust_policy(trust_policy_bytes, expected_sha256=trust_policy_sha256, now=now)
+        if policy.mode != "PRODUCTION":
+            raise PolicyError("Authority v2 requires a PRODUCTION trust policy.")
+        if sha256_bytes(manifest_bytes) != binding["manifest_hash"]:
+            raise IntegrityError("Custody manifest bytes do not match the preregistered manifest.")
+        custody = verify_custody_attestation(
+            custody_envelope_bytes,
+            trust_policy_bytes=trust_policy_bytes,
+            trust_policy_sha256=trust_policy_sha256,
+            manifest_bytes=manifest_bytes,
+            expected_suite_id=binding["suite_id"],
+            expected_manifest_sha256=binding["manifest_hash"],
+            now=now,
+        )
+        isolation = verify_isolation_attestation(
+            isolation_envelope_bytes,
+            trust_policy_bytes=trust_policy_bytes,
+            trust_policy_sha256=trust_policy_sha256,
+            result_bytes=isolation_result_bytes,
+            expected_suite_id=binding["suite_id"],
+            expected_case_id=binding["case_id"],
+            expected_variant=binding["variant"],
+            expected_run_id=run_id,
+            expected_target_snapshot_hash=target["snapshot_hash"],
+            expected_protocol_hash=run["protocol"]["sha256"],
+            now=now,
+        )
+        if not custody.production_qualified or not isolation.production_qualified:
+            raise PolicyError("Custody and isolation inputs must be production-qualified.")
+
+        checkpoint_digest = sha256_bytes(checkpoint_envelope_bytes)
+        request = self.build_authorization_request(
+            run_id,
+            candidate_id,
+            trust_policy_sha256=trust_policy_sha256,
+            checkpoint_envelope_sha256=checkpoint_digest,
+            custody_envelope_sha256=sha256_bytes(custody_envelope_bytes),
+            isolation_envelope_sha256=sha256_bytes(isolation_envelope_bytes),
+        )
+        checkpoint = verify_ledger_checkpoint(
+            checkpoint_envelope_bytes,
+            trust_policy_bytes=trust_policy_bytes,
+            trust_policy_sha256=trust_policy_sha256,
+            ledger_bytes=self._stable_evidence_read(
+                self.project.paths(run_id).ledger, "checkpoint_ledger"
+            )[0],
+            expected_suite_id=binding["suite_id"],
+            expected_case_id=binding["case_id"],
+            expected_variant=binding["variant"],
+            expected_run_id=run_id,
+            expected_target_snapshot_hash=target["snapshot_hash"],
+            expected_protocol_hash=run["protocol"]["sha256"],
+            now=now,
+        )
+        authority_type = request.required_predicate_type
+        signed_authority = verify_dsse_statement(
+            authority_envelope_bytes,
+            expected_predicate_type=authority_type,
+            trusted_keys=policy.keys_for(authority_type),
+            threshold=policy.threshold_for(authority_type),
+            predicate_schema="authority-authorization-predicate",
+        )
+        _require_subject_sha256(signed_authority.statement, request.prepared_graph_bytes)
+        predicate = signed_authority.predicate
+        expected = {
+            "run_id": run_id,
+            "candidate_id": candidate_id,
+            "target_snapshot_hash": target["snapshot_hash"],
+            "protocol_hash": run["protocol"]["sha256"],
+            "knowledge_boundary_hash": run["knowledge_boundary_hash"],
+            "context_manifest_hash": run["context_manifest_hash"],
+            "evidence_bundle_hash": request.evidence_bundle_hash,
+            "ledger_checkpoint_envelope_sha256": checkpoint_digest,
+            "custody_envelope_sha256": request.custody_envelope_sha256,
+            "isolation_envelope_sha256": request.isolation_envelope_sha256,
+            "prepared_graph_sha256": request.prepared_graph_sha256,
+            "decision": "AUTHORIZE_VERIFIED",
+            "authorized_state": "VERIFIED",
+            "trust_policy_sha256": trust_policy_sha256,
+            "issuer_actor_id": authority.actor_id,
+        }
+        for field_name, value in expected.items():
+            if predicate[field_name] != value:
+                raise IntegrityError(
+                    "Signed authority predicate does not match the prepared graph.",
+                    details={"field": field_name},
+                )
+        selected_now = _selected_time(now)
+        if _parse_time(predicate["expires_at"], "expires_at") < selected_now:
+            raise PolicyError("Signed authority authorization is expired.")
+        if signed_authority.trust_mode != "PRODUCTION" or not signed_authority.production_qualified:
+            raise PolicyError("Signed authority input is not production-qualified.")
+        self._require_production_actor_separation(
+            run_id,
+            candidate_id,
+            authority=authority,
+            custody=custody,
+            isolation=isolation,
+            checkpoint=checkpoint,
+            signed_authority=signed_authority,
+        )
+
+        report = self.evaluate(
+            run_id,
+            candidate_id,
+            authority=authority,
+            _authenticated_custody=True,
+            _authenticated_isolation=True,
+        )
+        if not report.eligible:
+            raise PolicyError(
+                "Candidate evidence graph still fails authorization gates.",
+                details=report.to_dict(),
+            )
+        _, descriptors, _, _, _, _ = self._authorization_graph(run_id, candidate_id)
+        return PreparedAuthorization(
+            request=request,
+            authority_envelope_sha256=sha256_bytes(authority_envelope_bytes),
+            authority_payload_sha256=signed_authority.payload_sha256,
+            checkpoint_envelope_sha256=checkpoint_digest,
+            checkpoint_payload_sha256=checkpoint.payload_sha256,
+            custody_envelope_sha256=sha256_bytes(custody_envelope_bytes),
+            custody_payload_sha256=custody.payload_sha256,
+            isolation_envelope_sha256=sha256_bytes(isolation_envelope_bytes),
+            isolation_payload_sha256=isolation.payload_sha256,
+            stable_file_descriptors=descriptors,
+            _gate_report=report,
+        )
+
+    def commit_authorization(
+        self,
+        prepared: PreparedAuthorization,
+        *,
+        authority: Actor,
+        authority_envelope_bytes: bytes,
+        checkpoint_envelope_bytes: bytes,
+        custody_envelope_bytes: bytes,
+        isolation_envelope_bytes: bytes,
+        trust_policy_bytes: bytes,
+        trust_policy_sha256: str,
+        manifest_bytes: bytes,
+        isolation_result_bytes: bytes,
+        now: datetime | str | None = None,
+    ) -> dict[str, Any]:
+        """Atomically serialize one VERIFIED transition against a prepared C_pre graph."""
+
+        if not isinstance(prepared, PreparedAuthorization):
+            raise UsageError("commit_authorization requires a PreparedAuthorization.")
+        run_id = prepared.request.run_id
+        candidate_id = prepared.request.candidate_id
+        root = self.project.candidate_dir(run_id, candidate_id)
+        marker_path = root / "authorization-commit.json"
+        with self.project.mutation(run_id):
+            output_paths = (root / "verdict.json", root / "certificate.yaml", marker_path)
+            if (
+                any(path.exists() for path in output_paths)
+                or self.project.current_state(run_id, candidate_id) is not State.REPRODUCED
+            ):
+                raise ConcurrentModificationError(
+                    "Authorization was already committed or the source state changed."
+                )
+            try:
+                rebuilt = self.prepare_authorization(
+                    run_id,
+                    candidate_id,
+                    authority=authority,
+                    authority_envelope_bytes=authority_envelope_bytes,
+                    checkpoint_envelope_bytes=checkpoint_envelope_bytes,
+                    custody_envelope_bytes=custody_envelope_bytes,
+                    isolation_envelope_bytes=isolation_envelope_bytes,
+                    trust_policy_bytes=trust_policy_bytes,
+                    trust_policy_sha256=trust_policy_sha256,
+                    manifest_bytes=manifest_bytes,
+                    isolation_result_bytes=isolation_result_bytes,
+                    now=now,
+                )
+            except (IntegrityError, PolicyError) as exc:
+                current_graph = self.build_authorization_request(
+                    run_id,
+                    candidate_id,
+                    trust_policy_sha256=trust_policy_sha256,
+                    checkpoint_envelope_sha256=sha256_bytes(checkpoint_envelope_bytes),
+                    custody_envelope_sha256=sha256_bytes(custody_envelope_bytes),
+                    isolation_envelope_sha256=sha256_bytes(isolation_envelope_bytes),
+                ).prepared_graph_sha256
+                if current_graph != prepared.request.prepared_graph_sha256:
+                    raise ConcurrentModificationError(
+                        "Prepared authorization evidence changed before commit.",
+                        details={
+                            "prepared": prepared.request.prepared_graph_sha256,
+                            "current": current_graph,
+                        },
+                    ) from exc
+                raise
+            stable_matches = all(
+                (
+                    rebuilt.request.prepared_graph_sha256 == prepared.request.prepared_graph_sha256,
+                    rebuilt.request.evidence_bundle_hash == prepared.request.evidence_bundle_hash,
+                    rebuilt.request.ledger == prepared.request.ledger,
+                    rebuilt.stable_file_descriptors == prepared.stable_file_descriptors,
+                    rebuilt.authority_envelope_sha256 == prepared.authority_envelope_sha256,
+                    rebuilt.authority_payload_sha256 == prepared.authority_payload_sha256,
+                    rebuilt.checkpoint_envelope_sha256 == prepared.checkpoint_envelope_sha256,
+                    rebuilt.checkpoint_payload_sha256 == prepared.checkpoint_payload_sha256,
+                    rebuilt.custody_envelope_sha256 == prepared.custody_envelope_sha256,
+                    rebuilt.custody_payload_sha256 == prepared.custody_payload_sha256,
+                    rebuilt.isolation_envelope_sha256 == prepared.isolation_envelope_sha256,
+                    rebuilt.isolation_payload_sha256 == prepared.isolation_payload_sha256,
+                )
+            )
+            if not stable_matches:
+                raise ConcurrentModificationError(
+                    "Prepared authorization evidence changed before commit."
+                )
+            c_pre_bytes, _ = self._stable_evidence_read(
+                self.project.paths(run_id).ledger, "c_pre_ledger"
+            )
+            stored_artifacts = {}
+            for artifact_name, data, original_name in (
+                (
+                    "prepared_graph",
+                    prepared.request.prepared_graph_bytes,
+                    "authorization-graph.json",
+                ),
+                (
+                    "evidence_manifest",
+                    prepared.request.evidence_manifest_bytes,
+                    f"{candidate_id}.evidence-manifest.json",
+                ),
+                ("c_pre", c_pre_bytes, "c-pre-ledger.jsonl"),
+                ("authority_envelope", authority_envelope_bytes, "authority-envelope.dsse.json"),
+                (
+                    "checkpoint_envelope",
+                    checkpoint_envelope_bytes,
+                    "checkpoint-envelope.dsse.json",
+                ),
+                ("custody_envelope", custody_envelope_bytes, "custody-envelope.dsse.json"),
+                (
+                    "isolation_envelope",
+                    isolation_envelope_bytes,
+                    "isolation-envelope.dsse.json",
+                ),
+            ):
+                stored_artifacts[artifact_name] = self.store.put_bytes(
+                    data,
+                    media_type=(
+                        "application/json" if artifact_name != "c_pre" else "application/x-ndjson"
+                    ),
+                    original_name=original_name,
+                )
+            for logical_name, expected_digest, data in prepared.request.file_preimages:
+                if logical_name.startswith("cas:"):
+                    self.store.verify_or_raise(expected_digest)
+                    continue
+                preimage_meta = self.store.put_bytes(
+                    data,
+                    media_type=(
+                        "application/x-ndjson"
+                        if logical_name in {"state_history", "observations", "expectations"}
+                        else "application/json"
+                    ),
+                    original_name=f"{logical_name.replace(':', '-')}.preimage",
+                )
+                if preimage_meta.sha256 != expected_digest:
+                    raise ConcurrentModificationError(
+                        "Prepared evidence preimage changed before authorization commit.",
+                        details={"path": logical_name},
+                    )
+            graph_meta = stored_artifacts["prepared_graph"]
+            if (
+                graph_meta.sha256 != prepared.request.prepared_graph_sha256
+                or stored_artifacts["evidence_manifest"].sha256
+                != prepared.request.evidence_bundle_hash
+                or stored_artifacts["c_pre"].sha256 != prepared.request.ledger["sha256"]
+            ):
+                raise ConcurrentModificationError(
+                    "Prepared graph or C_pre changed before authorization commit."
+                )
+            result = self.authorize(
+                run_id,
+                candidate_id,
+                authority=authority,
+                _gate_report=rebuilt._gate_report,
+                _authenticated_v2=True,
+                _evidence_manifest_bytes=prepared.request.evidence_manifest_bytes,
+                _expected_evidence_bundle_hash=prepared.request.evidence_bundle_hash,
+            )
+            post_report = self.project.ledger(run_id).verify(raise_on_error=True)
+            state_record = self.project.read_candidate(run_id, candidate_id)["state_history"][-1]
+            committed_at = (
+                utc_now()
+                if now is None
+                else (
+                    now
+                    if isinstance(now, str)
+                    else now.astimezone(UTC).isoformat().replace("+00:00", "Z")
+                )
+            )
+            marker = {
+                "schema_version": "0.4.0",
+                "run_id": run_id,
+                "candidate_id": candidate_id,
+                "prepared_graph_sha256": prepared.request.prepared_graph_sha256,
+                "prepared_graph_artifact_sha256": graph_meta.sha256,
+                "evidence_bundle_hash": prepared.request.evidence_bundle_hash,
+                "trust_policy_sha256": prepared.request.trust_policy_sha256,
+                "checkpoint_envelope_sha256": prepared.checkpoint_envelope_sha256,
+                "checkpoint_payload_sha256": prepared.checkpoint_payload_sha256,
+                "custody_envelope_sha256": prepared.custody_envelope_sha256,
+                "custody_payload_sha256": prepared.custody_payload_sha256,
+                "isolation_envelope_sha256": prepared.isolation_envelope_sha256,
+                "isolation_payload_sha256": prepared.isolation_payload_sha256,
+                "authority_envelope_sha256": prepared.authority_envelope_sha256,
+                "authority_payload_sha256": prepared.authority_payload_sha256,
+                "c_pre": dict(prepared.request.ledger),
+                "verdict_sha256": sha256_file(root / "verdict.json"),
+                "certificate_sha256": sha256_file(root / "certificate.yaml"),
+                "state_record_hash": state_record["record_hash"],
+                "post_ledger_entries_before_marker": post_report.entries,
+                "post_ledger_head_before_marker": post_report.last_hash,
+                "committed_at": committed_at,
+            }
+            validate_or_raise("authorization-commit", marker)
+            self.project.write_candidate_artifact(
+                run_id,
+                candidate_id,
+                "authorization-commit.json",
+                marker,
+                actor=authority,
+                event_type="AUTHORIZATION_COMMITTED",
+                schema_name="authorization-commit",
+            )
+            result["authorization_commit"] = marker
+            return result
+
     def authorize(
         self,
         run_id: str,
         candidate_id: str,
         *,
         authority: Actor,
+        _gate_report: GateReport | None = None,
+        _authenticated_v2: bool = False,
+        _evidence_manifest_bytes: bytes | None = None,
+        _expected_evidence_bundle_hash: str | None = None,
     ) -> dict[str, Any]:
         require_capability(authority, Capability.AUTHORIZE_VERDICT)
+        if not _authenticated_v2:
+            raise PolicyError(
+                "Legacy authorization is not authorized: it is non-authenticated and cannot "
+                "create VERIFIED; "
+                "use Authority v2 prepare/commit with externally authenticated attestations."
+            )
         bundle = self.project.read_candidate(run_id, candidate_id)
         candidate = bundle["candidate"]
         proposer_id = candidate["proposed_by"]["actor_id"]
         require_distinct_actors(proposer_id, authority.actor_id)
-        report = self.evaluate(run_id, candidate_id, authority=authority)
-        self.project.append_candidate_record(
-            run_id,
-            candidate_id,
-            "verification-attempts.jsonl",
-            {"attempted_at": utc_now(), "authority": authority.to_dict(), **report.to_dict()},
-            actor=authority,
-            event_type="VERIFICATION_EVALUATED",
-        )
+        report = _gate_report or self.evaluate(run_id, candidate_id, authority=authority)
         if not report.eligible:
             raise PolicyError(
                 "Candidate is not authorized for VERIFIED.",
@@ -771,8 +1658,22 @@ class AuthorityKernel:
             "observations": [metadata.to_reference() for metadata in observation_meta],
             "referenced_artifacts": [metadata.to_reference() for metadata in referenced_metadata],
         }
+        manifest_bytes = canonical_json(manifest)
+        if (
+            _evidence_manifest_bytes is None
+            or _expected_evidence_bundle_hash is None
+            or manifest_bytes != _evidence_manifest_bytes
+            or sha256_bytes(manifest_bytes) != _expected_evidence_bundle_hash
+        ):
+            raise ConcurrentModificationError(
+                "The signed evidence manifest no longer matches the authorization graph.",
+                details={
+                    "prepared_sha256": _expected_evidence_bundle_hash,
+                    "current_sha256": sha256_bytes(manifest_bytes),
+                },
+            )
         manifest_meta = self.store.put_bytes(
-            canonical_json(manifest),
+            _evidence_manifest_bytes,
             media_type="application/json",
             original_name=f"{candidate_id}.evidence-manifest.json",
         )
@@ -906,7 +1807,14 @@ class AuthorityKernel:
         )
         return {"gate_report": report.to_dict(), "verdict": verdict, "certificate": certificate}
 
-    def audit_certificate(self, run_id: str, candidate_id: str) -> dict[str, Any]:
+    def _audit_certificate(
+        self,
+        run_id: str,
+        candidate_id: str,
+        *,
+        _authenticated_custody: bool = False,
+        _authenticated_isolation: bool = False,
+    ) -> dict[str, Any]:
         """Re-evaluate a VERIFIED certificate against its live evidence graph.
 
         A schema-valid certificate is not sufficient for publication.  This audit
@@ -925,7 +1833,13 @@ class AuthorityKernel:
 
         authority_data = verdict["authority_actor"]
         authority = Actor(authority_data["actor_id"], authority_data["role"])
-        gate_report = self.evaluate(run_id, candidate_id, authority=authority)
+        gate_report = self.evaluate(
+            run_id,
+            candidate_id,
+            authority=authority,
+            _authenticated_custody=_authenticated_custody,
+            _authenticated_isolation=_authenticated_isolation,
+        )
         run = self.project.get_run(run_id)
         target = self.project.get_target(run_id)
         bundle = self.project.read_candidate(run_id, candidate_id)
@@ -970,6 +1884,63 @@ class AuthorityKernel:
             digest=certificate_sha256,
         )
         verified_events = matching_events("STATE_TRANSITION", to_state="VERIFIED")
+
+        marker_path = root / "authorization-commit.json"
+        authorization_v2_marker_bound = False
+        if marker_path.is_file():
+            try:
+                marker = read_json(marker_path)
+                validate_or_raise("authorization-commit", marker)
+                marker_sha256 = sha256_file(marker_path)
+                marker_events = matching_events(
+                    "AUTHORIZATION_COMMITTED",
+                    path="authorization-commit.json",
+                    digest=marker_sha256,
+                )
+                if (
+                    len(marker_events) == 1
+                    and len(verdict_events) == 1
+                    and len(certificate_events) == 1
+                    and len(verified_events) == 1
+                ):
+                    verdict_event = verdict_events[0]
+                    certificate_event = certificate_events[0]
+                    verified_event = verified_events[0]
+                    marker_event = marker_events[0]
+                    authorization_v2_marker_bound = all(
+                        (
+                            marker["run_id"] == run_id,
+                            marker["candidate_id"] == candidate_id,
+                            marker["prepared_graph_artifact_sha256"]
+                            == marker["prepared_graph_sha256"],
+                            self.store.verify(marker["prepared_graph_artifact_sha256"]).valid,
+                            self.store.verify(marker["c_pre"]["sha256"]).valid,
+                            marker["evidence_bundle_hash"] == certificate["evidence_bundle_hash"],
+                            marker["evidence_bundle_hash"] == verdict["evidence_bundle_hash"],
+                            marker["verdict_sha256"] == verdict_sha256,
+                            marker["certificate_sha256"] == certificate_sha256,
+                            marker["state_record_hash"]
+                            == bundle["state_history"][-1]["record_hash"],
+                            marker["c_pre"]["entries"] == verdict_event["sequence"],
+                            marker["c_pre"]["last_hash"] == verdict_event["previous_event_hash"],
+                            certificate_event["sequence"] == verdict_event["sequence"] + 1,
+                            certificate_event["previous_event_hash"] == verdict_event["event_hash"],
+                            verified_event["sequence"] == certificate_event["sequence"] + 1,
+                            verified_event["previous_event_hash"]
+                            == certificate_event["event_hash"],
+                            marker_event["sequence"] == verified_event["sequence"] + 1,
+                            marker_event["previous_event_hash"] == verified_event["event_hash"],
+                            marker_event["sequence"] == marker["post_ledger_entries_before_marker"],
+                            marker_event["previous_event_hash"]
+                            == marker["post_ledger_head_before_marker"],
+                            marker["post_ledger_entries_before_marker"]
+                            == verified_event["sequence"] + 1,
+                            marker["post_ledger_head_before_marker"]
+                            == verified_event["event_hash"],
+                        )
+                    )
+            except Exception:
+                authorization_v2_marker_bound = False
 
         bundle_digest = certificate["evidence_bundle_hash"]
         bundle_verification = self.store.verify(bundle_digest)
@@ -1346,6 +2317,7 @@ class AuthorityKernel:
             "issuance_events_bound": event_chain_bound,
             "issuance_actors_bound": event_actors_bound,
             "verified_state_record_bound": state_record_bound,
+            "authorization_v2_marker_bound": authorization_v2_marker_bound,
         }
         failed_checks = sorted(name for name, passed in checks.items() if not passed)
         return {
@@ -1356,3 +2328,240 @@ class AuthorityKernel:
             "certificate_sha256": certificate_sha256,
             "verdict_sha256": verdict_sha256,
         }
+
+    def audit_certificate(self, run_id: str, candidate_id: str) -> dict[str, Any]:
+        """Audit legacy/local evidence without accepting caller-declared authentication."""
+
+        try:
+            return self._audit_certificate(run_id, candidate_id)
+        except Exception as exc:
+            # Public audit is a total fail-closed inspection boundary. Malformed or
+            # concurrently corrupted producer evidence is an invalid certificate,
+            # never an unhandled parser/shape exception that can abort a report run.
+            return {
+                "valid": False,
+                "checks": {"audit_completed": False},
+                "failed_checks": ["audit_completed"],
+                "certificate_sha256": None,
+                "verdict_sha256": None,
+                "error": {
+                    "code": getattr(exc, "code", "INTEGRITY_ERROR"),
+                    "message": "Certificate evidence could not be audited safely.",
+                    "details": {"exception_type": type(exc).__name__},
+                },
+            }
+
+    @_consistent_authority_read
+    def audit_certificate_v2(
+        self,
+        run_id: str,
+        candidate_id: str,
+        *,
+        authority: Actor,
+        authority_envelope_bytes: bytes,
+        checkpoint_envelope_bytes: bytes,
+        custody_envelope_bytes: bytes,
+        isolation_envelope_bytes: bytes,
+        trust_policy_bytes: bytes,
+        trust_policy_sha256: str,
+        manifest_bytes: bytes,
+        isolation_result_bytes: bytes,
+        now: datetime | str | None = None,
+    ) -> dict[str, Any]:
+        """Re-authenticate every v2 external input and require the atomic commit marker."""
+
+        root = self.project.candidate_dir(run_id, candidate_id)
+        marker_bytes, _ = self._stable_evidence_read(
+            root / "authorization-commit.json", "authorization_commit"
+        )
+        marker = parse_strict_json(marker_bytes)
+        validate_or_raise("authorization-commit", marker)
+        verdict_bytes, _ = self._stable_evidence_read(root / "verdict.json", "verdict")
+        verdict = parse_strict_json(verdict_bytes)
+        validate_or_raise("verdict", verdict)
+        if verdict["authority_actor"] != authority.to_dict():
+            raise IntegrityError("Authority audit actor does not match the committed verdict.")
+        run = self.project.get_run(run_id)
+        target = self.project.get_target(run_id)
+        binding = run.get("trial_binding")
+        if not isinstance(binding, dict):
+            raise IntegrityError("Authority v2 certificate lacks a trial binding.")
+        policy = load_trust_policy(trust_policy_bytes, expected_sha256=trust_policy_sha256, now=now)
+        if policy.mode != "PRODUCTION":
+            raise PolicyError("Authority v2 audit requires a PRODUCTION trust policy.")
+        if sha256_bytes(manifest_bytes) != binding["manifest_hash"]:
+            raise IntegrityError("Custody manifest bytes do not match the trial binding.")
+        replay_bytes, _ = self._stable_evidence_read(
+            root / "replay" / "result.json", "replay_result_subject"
+        )
+        if replay_bytes != isolation_result_bytes:
+            raise IntegrityError("Isolation subject is not the current replay result bytes.")
+        custody = verify_custody_attestation(
+            custody_envelope_bytes,
+            trust_policy_bytes=trust_policy_bytes,
+            trust_policy_sha256=trust_policy_sha256,
+            manifest_bytes=manifest_bytes,
+            expected_suite_id=binding["suite_id"],
+            expected_manifest_sha256=binding["manifest_hash"],
+            now=now,
+        )
+        isolation = verify_isolation_attestation(
+            isolation_envelope_bytes,
+            trust_policy_bytes=trust_policy_bytes,
+            trust_policy_sha256=trust_policy_sha256,
+            result_bytes=isolation_result_bytes,
+            expected_suite_id=binding["suite_id"],
+            expected_case_id=binding["case_id"],
+            expected_variant=binding["variant"],
+            expected_run_id=run_id,
+            expected_target_snapshot_hash=target["snapshot_hash"],
+            expected_protocol_hash=run["protocol"]["sha256"],
+            now=now,
+        )
+        self.store.verify_or_raise(marker["c_pre"]["sha256"])
+        c_pre_bytes = self.store.read_bytes(marker["c_pre"]["sha256"])
+        checkpoint = verify_ledger_checkpoint(
+            checkpoint_envelope_bytes,
+            trust_policy_bytes=trust_policy_bytes,
+            trust_policy_sha256=trust_policy_sha256,
+            ledger_bytes=c_pre_bytes,
+            expected_suite_id=binding["suite_id"],
+            expected_case_id=binding["case_id"],
+            expected_variant=binding["variant"],
+            expected_run_id=run_id,
+            expected_target_snapshot_hash=target["snapshot_hash"],
+            expected_protocol_hash=run["protocol"]["sha256"],
+            now=now,
+        )
+        self.store.verify_or_raise(marker["prepared_graph_artifact_sha256"])
+        graph_bytes = self.store.read_bytes(marker["prepared_graph_artifact_sha256"])
+        for field_name, envelope_bytes in (
+            ("authority_envelope_sha256", authority_envelope_bytes),
+            ("checkpoint_envelope_sha256", checkpoint_envelope_bytes),
+            ("custody_envelope_sha256", custody_envelope_bytes),
+            ("isolation_envelope_sha256", isolation_envelope_bytes),
+        ):
+            digest = marker[field_name]
+            self.store.verify_or_raise(digest)
+            if self.store.read_bytes(digest) != envelope_bytes:
+                raise IntegrityError(
+                    "Retained external attestation does not match the audited envelope.",
+                    details={"field": field_name},
+                )
+        authority_type = "https://schemas.unasked.dev/attestations/authority-authorization/v0.4"
+        signed_authority = verify_dsse_statement(
+            authority_envelope_bytes,
+            expected_predicate_type=authority_type,
+            trusted_keys=policy.keys_for(authority_type),
+            threshold=policy.threshold_for(authority_type),
+            predicate_schema="authority-authorization-predicate",
+        )
+        _require_subject_sha256(signed_authority.statement, graph_bytes)
+        if not all(
+            item.production_qualified for item in (custody, isolation, checkpoint, signed_authority)
+        ):
+            raise PolicyError("Authority v2 audit inputs are not production-qualified.")
+        graph = parse_strict_json(graph_bytes)
+        expected_graph = {
+            "schema_version": "0.4.0",
+            "run_id": run_id,
+            "candidate_id": candidate_id,
+            "source_state": "REPRODUCED",
+            "target_state": "VERIFIED",
+            "target_snapshot_hash": target["snapshot_hash"],
+            "protocol_hash": run["protocol"]["sha256"],
+            "knowledge_boundary_hash": run["knowledge_boundary_hash"],
+            "context_manifest_hash": run["context_manifest_hash"],
+            "ledger": marker["c_pre"],
+            "external_attestations": {
+                "trust_policy_sha256": trust_policy_sha256,
+                "checkpoint_envelope_sha256": sha256_bytes(checkpoint_envelope_bytes),
+                "custody_envelope_sha256": sha256_bytes(custody_envelope_bytes),
+                "isolation_envelope_sha256": sha256_bytes(isolation_envelope_bytes),
+            },
+        }
+        if set(graph) != {*expected_graph, "files"} or any(
+            graph.get(field_name) != value for field_name, value in expected_graph.items()
+        ):
+            raise IntegrityError("Stored authorization graph does not match committed inputs.")
+        if not isinstance(graph.get("files"), list):
+            raise IntegrityError("Stored authorization graph has an invalid file manifest.")
+        for descriptor in graph["files"]:
+            if (
+                not isinstance(descriptor, dict)
+                or set(descriptor) != {"path", "sha256", "artifact_sha256", "size"}
+                or descriptor["sha256"] != descriptor["artifact_sha256"]
+            ):
+                raise IntegrityError("Stored authorization graph has an invalid preimage binding.")
+            verification = self.store.verify_or_raise(descriptor["artifact_sha256"])
+            if verification.size != descriptor["size"]:
+                raise IntegrityError("Stored authorization graph preimage size does not match.")
+        graph_sha256 = sha256_bytes(graph_bytes)
+        self.store.verify_or_raise(marker["evidence_bundle_hash"])
+        evidence_manifest_bytes = self.store.read_bytes(marker["evidence_bundle_hash"])
+        if sha256_bytes(evidence_manifest_bytes) != marker["evidence_bundle_hash"]:
+            raise IntegrityError("Stored evidence manifest digest does not match the marker.")
+        expected_marker = {
+            "prepared_graph_sha256": graph_sha256,
+            "prepared_graph_artifact_sha256": graph_sha256,
+            "evidence_bundle_hash": sha256_bytes(evidence_manifest_bytes),
+            "trust_policy_sha256": trust_policy_sha256,
+            "checkpoint_envelope_sha256": sha256_bytes(checkpoint_envelope_bytes),
+            "checkpoint_payload_sha256": checkpoint.payload_sha256,
+            "custody_envelope_sha256": sha256_bytes(custody_envelope_bytes),
+            "custody_payload_sha256": custody.payload_sha256,
+            "isolation_envelope_sha256": sha256_bytes(isolation_envelope_bytes),
+            "isolation_payload_sha256": isolation.payload_sha256,
+            "authority_envelope_sha256": sha256_bytes(authority_envelope_bytes),
+            "authority_payload_sha256": signed_authority.payload_sha256,
+        }
+        for field_name, value in expected_marker.items():
+            if marker[field_name] != value:
+                raise IntegrityError(
+                    "Authorization marker does not match re-authenticated v2 inputs.",
+                    details={"field": field_name},
+                )
+        predicate = signed_authority.predicate
+        expected_predicate = {
+            "run_id": run_id,
+            "candidate_id": candidate_id,
+            "target_snapshot_hash": target["snapshot_hash"],
+            "protocol_hash": run["protocol"]["sha256"],
+            "knowledge_boundary_hash": run["knowledge_boundary_hash"],
+            "context_manifest_hash": run["context_manifest_hash"],
+            "evidence_bundle_hash": marker["evidence_bundle_hash"],
+            "ledger_checkpoint_envelope_sha256": marker["checkpoint_envelope_sha256"],
+            "custody_envelope_sha256": marker["custody_envelope_sha256"],
+            "isolation_envelope_sha256": marker["isolation_envelope_sha256"],
+            "prepared_graph_sha256": marker["prepared_graph_sha256"],
+            "decision": "AUTHORIZE_VERIFIED",
+            "authorized_state": "VERIFIED",
+            "trust_policy_sha256": trust_policy_sha256,
+            "issuer_actor_id": authority.actor_id,
+        }
+        for field_name, value in expected_predicate.items():
+            if predicate[field_name] != value:
+                raise IntegrityError(
+                    "Signed authority predicate does not match the committed authorization.",
+                    details={"field": field_name},
+                )
+        if _parse_time(predicate["expires_at"], "expires_at") < _selected_time(now):
+            raise PolicyError("Signed authority authorization is expired.")
+        self._require_production_actor_separation(
+            run_id,
+            candidate_id,
+            authority=authority,
+            custody=custody,
+            isolation=isolation,
+            checkpoint=checkpoint,
+            signed_authority=signed_authority,
+        )
+        audit = self._audit_certificate(
+            run_id,
+            candidate_id,
+            _authenticated_custody=True,
+            _authenticated_isolation=True,
+        )
+        if not audit["valid"]:
+            raise IntegrityError("Authority v2 certificate audit failed.", details=audit)
+        return audit

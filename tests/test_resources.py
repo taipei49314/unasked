@@ -21,11 +21,15 @@ def test_bundled_resources_match_source_files() -> None:
         "examples/provider-scripted.json",
         "examples/trial-evidence-index.json",
         "examples/trial-preregistration.json",
+        "examples/trust-policy-shadow.json",
         "protocols/m0-development-v0.1.json",
         "protocols/p0-v0.1.json",
         "templates/WORK_PACKAGE.md",
         "unasked-threat-model.md",
     }
+    policy = (root / "examples" / "trust-policy-shadow.json").read_text(encoding="utf-8")
+    assert '"mode": "SHADOW"' in policy
+    assert "PRIVATE KEY" not in policy
     for item in resources:
         data = (root / item["path"]).read_bytes()
         assert item["bytes"] == len(data)
