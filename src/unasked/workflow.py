@@ -1829,7 +1829,35 @@ class InvestigationService:
                     receipt_valid,
                 )
             ):
-                raise PolicyError("A passing external replay lacks a verifiable isolation receipt.")
+                raise PolicyError(
+                    "A passing external replay lacks a well-formed isolation receipt reference."
+                )
+            expected_receipt = {
+                "schema_version": SCHEMA_VERSION,
+                "issuer": isolation["issuer"],
+                "claims": sorted(isolation["claims"]),
+                "status": "ATTESTED",
+                "subject": {
+                    "run_id": run_id,
+                    "source_run_id": result["source_run_id"],
+                    "hypothesis_id": result["hypothesis_id"],
+                    "reproducer_actor_id": actor.actor_id,
+                    "input_manifest_hash": hash_json(expected_input_manifest),
+                    "command_result_sha256s": [
+                        reference["sha256"] for reference in result["command_result_refs"]
+                    ],
+                },
+            }
+            try:
+                receipt_document = read_json(self.store.get_path(digest))
+            except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                raise PolicyError(
+                    "The external isolation receipt is not valid JSON evidence."
+                ) from exc
+            if receipt_document != expected_receipt:
+                raise PolicyError(
+                    "The external isolation receipt is not bound to this replay result."
+                )
         if result["environment_hash"] != hash_json(environment):
             raise PolicyError(
                 "External replay environment_hash does not match the imported environment."
