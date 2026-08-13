@@ -7,10 +7,12 @@ import json
 import os
 import platform
 import stat
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
+from functools import wraps
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from unasked import __version__
 from unasked.artifacts import ArtifactMetadata, ArtifactStore
@@ -36,6 +38,21 @@ _SYSTEM_DIFF_COMMAND = {
     "purpose": "Capture every sandbox-only filesystem and Git-metadata mutation.",
     "expected_observation": "A complete canonical mutation manifest, possibly empty.",
 }
+
+_T = TypeVar("_T")
+
+
+def _compound_run_mutation(method: Callable[..., _T]) -> Callable[..., _T]:
+    """Hold one run lock from a service operation's first read through its final event."""
+
+    @wraps(method)
+    def wrapped(self: InvestigationService, run_id: str, *args: Any, **kwargs: Any) -> _T:
+        with self.project.mutation(run_id):
+            return method(self, run_id, *args, **kwargs)
+
+    return wrapped
+
+
 _ROOT_GUARD_KEY = b""
 _LOCAL_ENVIRONMENT_LIMITATION = "environment-name stripping only"
 
@@ -848,6 +865,7 @@ class InvestigationService:
     def store(self) -> ArtifactStore:
         return ArtifactStore(self.project.artifacts_root)
 
+    @_compound_run_mutation
     def observe(self, run_id: str, *, actor: Actor) -> dict[str, Any]:
         require_capability(actor, Capability.OBSERVE)
         target = self.project.get_target(run_id)
@@ -900,7 +918,8 @@ class InvestigationService:
                 event_type="OBSERVATION_RECORDED",
             )
             normalized.append(enriched)
-        self.project.ledger(run_id).append(
+        self.project.append_event(
+            run_id,
             "OBSERVATION_BATCH_CAPTURED",
             {"count": len(normalized), "raw_sha256": raw_meta.sha256},
             actor=actor.to_dict(),
@@ -943,6 +962,7 @@ class InvestigationService:
             "knowledge_scan": knowledge_scan,
         }
 
+    @_compound_run_mutation
     def record_custody_attestation(
         self,
         run_id: str,
@@ -998,6 +1018,7 @@ class InvestigationService:
         )
         return attestation
 
+    @_compound_run_mutation
     def add_expectation(
         self,
         run_id: str,
@@ -1046,6 +1067,7 @@ class InvestigationService:
             event_type="EXPECTATION_RECORDED",
         )
 
+    @_compound_run_mutation
     def propose_candidate(
         self,
         run_id: str,
@@ -1137,6 +1159,7 @@ class InvestigationService:
             run_id, candidate=candidate, hypothesis=hypothesis, actor=actor
         )
 
+    @_compound_run_mutation
     def plan_experiment(
         self,
         run_id: str,
@@ -1480,6 +1503,7 @@ class InvestigationService:
             evidence_records.extend(full_refs)
         return result_executions, _deduplicate_refs(all_refs), environment, denied or ""
 
+    @_compound_run_mutation
     def execute_experiment(
         self,
         run_id: str,
@@ -1553,6 +1577,7 @@ class InvestigationService:
             )
         return result
 
+    @_compound_run_mutation
     def add_review(
         self,
         run_id: str,
@@ -1635,6 +1660,7 @@ class InvestigationService:
         )
         return review
 
+    @_compound_run_mutation
     def replay(
         self,
         run_id: str,
@@ -1760,6 +1786,7 @@ class InvestigationService:
             )
         return result
 
+    @_compound_run_mutation
     def import_external_replay(
         self,
         run_id: str,

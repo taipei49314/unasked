@@ -3,6 +3,36 @@
 All notable software changes are recorded here. Milestone claims remain governed by
 `constitution/CLAIMS_POLICY.md` and require independent evidence beyond a software release.
 
+## 0.4.0 — 2026-08-13
+
+### Added
+
+- Exact-byte SHA-256-pinned external trust policies, Ed25519 verification, DSSE PAE, and
+  in-toto Statement v1 predicates for custody, isolation, ledger checkpoints, discovery
+  authorization, trial evaluation, and M0 certification.
+- A two-phase authority flow that prepares a deterministic pre-state graph and commits under
+  the run mutation lock only after re-verifying signed authority and checkpoint envelopes.
+- Authenticated v0.4 M0 verification across the complete 5-by-7 run matrix, exact result and
+  ledger bytes, every authorization marker, final checkpoints, evaluator statement, and
+  certifier statement.
+
+### Security
+
+- Enforce trust-role thresholds by unique keys and, in PRODUCTION, unique actors; reject
+  revoked, premature, expired, cross-role, or substituted signing identities.
+- Bind external envelope bytes, CAS graphs, pre-commit and final ledger heads, marker events,
+  trial index entries, and all relative locators without following links outside their roots.
+- Keep legacy authorization and reporting fail closed; externally authenticated v0.4 evidence
+  is required before a `VERIFIED` certificate can be treated as authoritative.
+
+### Claim boundary
+
+This software release includes authenticated verification machinery, not authenticated
+research results. Its public trust-policy example is `SHADOW`, contains no private key, and
+can never authorize `M0_DEMONSTRATED`. No independently held sealed benchmark was run for
+this release; the repository's public status remains `m0_demonstrated=false`, and the exact
+result without complete independent production evidence is `M0_NOT_DEMONSTRATED`.
+
 ## 0.3.0 — 2026-08-13
 
 ### Added

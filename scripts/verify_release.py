@@ -50,6 +50,44 @@ _SOURCE_FILES = (
     "unasked-threat-model.md",
     "uv.lock",
 )
+_V04_PACKAGE_FILES = {
+    "unasked/attestations.py",
+    "unasked/locking.py",
+    "unasked/trust.py",
+}
+_V04_SCHEMA_FILES = {
+    "authority-authorization-predicate.schema.json",
+    "authorization-commit.schema.json",
+    "custody-attestation-predicate.schema.json",
+    "isolation-attestation-predicate.schema.json",
+    "ledger-checkpoint-predicate.schema.json",
+    "m0-certification-predicate.schema.json",
+    "trial-evaluation-predicate.schema.json",
+    "trial-run-matrix.schema.json",
+    "trust-policy.schema.json",
+}
+_FORBIDDEN_PUBLIC_JSON_KEYS = {
+    "case_kind",
+    "d",
+    "expected_result",
+    "ground_truth",
+    "hidden_case",
+    "hidden_cases",
+    "minimum_evidence",
+    "private_key",
+    "private_key_base64",
+    "seed",
+    "signing_key",
+}
+_FORBIDDEN_PUBLIC_NAME_RE = re.compile(
+    r"(?:^|[-_.])(?:ground[-_]?truth|hidden[-_]?cases?|private[-_]?key|"
+    r"sealed[-_]?(?:case|manifest)|seed|signing[-_]?key)(?:[-_.]|$)",
+    re.IGNORECASE,
+)
+_PRIVATE_PEM_RE = re.compile(rb"-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----")
+_PRIVATE_KEY_CODE_RE = re.compile(
+    rb"\b(?:Ed25519" + rb"PrivateKey|load_(?:pem|der|ssh)_private_key|private_" + rb"bytes)\b"
+)
 
 
 class ReleaseCheckError(RuntimeError):
@@ -229,11 +267,93 @@ def _source_paths(root: Path) -> list[Path]:
     return sorted(set(paths), key=lambda path: path.relative_to(root).as_posix())
 
 
+def _require_current_release_contract(root: Path, *, version: str) -> None:
+    note = root / ".github" / "releases" / f"{version}.md"
+    if not note.is_file():
+        raise ReleaseCheckError(f"Current release note is missing: .github/releases/{version}.md")
+    note_text = note.read_text(encoding="utf-8")
+    required_claims = ("SHADOW", "m0_demonstrated=false", "M0_NOT_DEMONSTRATED")
+    if any(claim not in note_text for claim in required_claims):
+        raise ReleaseCheckError("Current release note does not preserve the claim boundary.")
+    required_package = {
+        root / "src" / relative.replace("/", os.sep) for relative in _V04_PACKAGE_FILES
+    }
+    required_schemas = {
+        root / "src" / "unasked" / "schema_defs" / filename for filename in _V04_SCHEMA_FILES
+    }
+    missing = sorted(
+        path.relative_to(root).as_posix()
+        for path in required_package | required_schemas
+        if not path.is_file()
+    )
+    if missing:
+        raise ReleaseCheckError(f"Required v0.4 package surface is missing: {missing!r}")
+    policy_path = root / "examples" / "trust-policy-shadow.json"
+    if not policy_path.is_file():
+        raise ReleaseCheckError("The public SHADOW trust-policy example is missing.")
+    policy_bytes = policy_path.read_bytes()
+    try:
+        policy = json.loads(policy_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ReleaseCheckError("The public SHADOW trust-policy example is malformed.") from exc
+    if not isinstance(policy, dict) or policy.get("mode") != "SHADOW":
+        raise ReleaseCheckError("The public trust-policy example must be exactly SHADOW mode.")
+    policy_sha256 = hashlib.sha256(policy_bytes).hexdigest()
+    readme = (root / "README.md").read_text(encoding="utf-8")
+    if policy_sha256 not in readme:
+        raise ReleaseCheckError("README does not bind the exact public SHADOW policy SHA-256.")
+
+
+def _scan_json_payload(value: Any, *, path: str) -> None:
+    if isinstance(value, dict):
+        forbidden = sorted(set(value) & _FORBIDDEN_PUBLIC_JSON_KEYS)
+        if forbidden:
+            raise ReleaseCheckError(
+                f"Public resource contains a forbidden secret/hidden payload key: {path}: "
+                f"{forbidden!r}"
+            )
+        if {"kty", "crv", "x", "d"} <= set(value):
+            raise ReleaseCheckError(f"Public resource contains private JWK material: {path}")
+        for child in value.values():
+            _scan_json_payload(child, path=path)
+    elif isinstance(value, list):
+        for child in value:
+            _scan_json_payload(child, path=path)
+
+
+def _scan_public_resource(path: str, data: bytes) -> None:
+    name = PurePosixPath(path).name
+    if _FORBIDDEN_PUBLIC_NAME_RE.search(name):
+        raise ReleaseCheckError(f"Published resource has a forbidden secret/hidden name: {path}")
+    if _PRIVATE_PEM_RE.search(data):
+        raise ReleaseCheckError(f"Published resource contains private PEM material: {path}")
+    if (
+        PurePosixPath(path).suffix == ".py"
+        and not path.startswith("tests/")
+        and _PRIVATE_KEY_CODE_RE.search(data)
+    ):
+        raise ReleaseCheckError(f"Published runtime source contains private-key code: {path}")
+    if PurePosixPath(path).suffix == ".json":
+        try:
+            document = json.loads(data.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ReleaseCheckError(f"Published JSON resource is malformed: {path}") from exc
+        _scan_json_payload(document, path=path)
+
+
+def _scan_source_public_resources(root: Path) -> None:
+    for path in _source_paths(root):
+        relative = path.relative_to(root).as_posix()
+        _scan_public_resource(relative, path.read_bytes())
+
+
 def verify_source(root: Path, *, tag: str | None = None) -> dict[str, Any]:
     root = root.resolve()
     name, version = _project_metadata(root)
     if tag is not None and tag != f"v{version}":
         raise ReleaseCheckError(f"Tag {tag!r} does not match project version v{version}.")
+    _require_current_release_contract(root, version=version)
+    _scan_source_public_resources(root)
     charter = root / "constitution" / "UNASKED_NORTH_STAR_v0.1.md"
     charter_hash = sha256_path(charter)
     if charter_hash != EXPECTED_CHARTER_SHA256:
@@ -406,6 +526,16 @@ def _verify_wheel(
         _verify_metadata(metadata_bytes, root=root, name=name, version=version)
         _verify_wheel_control_files(root, archive, dist_info=dist_info)
         names = set(archive.namelist())
+        required_v04 = _V04_PACKAGE_FILES | {
+            f"unasked/schema_defs/{filename}" for filename in _V04_SCHEMA_FILES
+        }
+        missing_v04 = sorted(required_v04 - names)
+        if missing_v04:
+            raise ReleaseCheckError(f"Wheel is missing the v0.4 trust surface: {missing_v04!r}")
+        if any(name.startswith("tests/") or "/tests/" in name for name in names):
+            raise ReleaseCheckError("Wheel must not contain test-only key fixtures.")
+        for name in sorted(names):
+            _scan_public_resource(name, archive.read(name))
         for source in (root / "src" / "unasked").rglob("*"):
             if not source.is_file() or "__pycache__" in source.parts or source.suffix == ".pyc":
                 continue
@@ -441,6 +571,14 @@ def _verify_sdist(
         }
         expected_members.add(f"{distribution_root}/PKG-INFO")
         _require_exact_members(set(member_names), expected_members, kind="Source distribution")
+        for archive_path, member in members.items():
+            relative = PurePosixPath(archive_path).relative_to(distribution_root).as_posix()
+            if relative == "PKG-INFO":
+                continue
+            stream = archive.extractfile(member)
+            if stream is None:
+                raise ReleaseCheckError(f"Source distribution member is unreadable: {relative}")
+            _scan_public_resource(relative, stream.read())
         for source in source_paths:
             relative = source.relative_to(root).as_posix()
             archive_path = f"{distribution_root}/{relative}"

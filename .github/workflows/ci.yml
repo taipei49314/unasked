@@ -116,9 +116,32 @@ jobs:
           cd "$RUNNER_TEMP"
           "$RUNNER_TEMP/unasked-wheel/bin/unasked" --version
           "$RUNNER_TEMP/unasked-wheel/bin/unasked" --json doctor
+          test "$("$RUNNER_TEMP/unasked-wheel/bin/unasked" --version)" = "unasked 0.4.0"
+          "$RUNNER_TEMP/unasked-wheel/bin/unasked" attestations verify --help
+          "$RUNNER_TEMP/unasked-wheel/bin/unasked" schemas show trust-policy > /dev/null
+          "$RUNNER_TEMP/unasked-wheel/bin/unasked" schemas show trial-run-matrix > /dev/null
           "$RUNNER_TEMP/unasked-wheel/bin/unasked" --json resources export --destination unasked-kit
           test -f unasked-kit/protocols/m0-development-v0.1.json
           test -f unasked-kit/examples/m0-budget.json
+          test -f unasked-kit/examples/trust-policy-shadow.json
+          "$RUNNER_TEMP/unasked-wheel/bin/python" - <<'PY'
+          import json
+          from unasked.trials import ABLATION_VARIANTS, aggregate_trials, manifest_digest
+          manifest = {
+              "suite_id": "SHADOW-SMOKE",
+              "cases": [
+                  *[{"case_id": f"P-{i}", "kind": "POSITIVE", "impact_weight": 1} for i in range(5)],
+                  *[{"case_id": f"C-{i}", "kind": "CONTROL", "impact_weight": 0} for i in range(2)],
+              ],
+              "custody": {"status": "UNSEALED", "independent": False, "sealed_before_explorer": False},
+          }
+          digest = manifest_digest(manifest)
+          finding = lambda case: {"case_id": case["case_id"], **{name: False for name in ("claimed_verified", "verified", "unasked", "novel", "replay_passed", "counterevidence_passed", "external_authority", "decision_impact", "evidence_complete")}}
+          results = [{"variant": variant, "manifest_hash": digest, "protocol_hash": "0" * 64, "normalized_budget": "1", "findings": [finding(case) for case in manifest["cases"]]} for variant in ABLATION_VARIANTS]
+          with open("legacy-report.json", "w", encoding="utf-8") as stream:
+              json.dump(aggregate_trials(manifest, results), stream)
+          PY
+          test "$("$RUNNER_TEMP/unasked-wheel/bin/unasked" --json trials certify --report legacy-report.json | jq -r '.data.claim')" = "M0_NOT_DEMONSTRATED"
       - name: Upload verified distributions
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:

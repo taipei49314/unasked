@@ -30,3 +30,9 @@ class NotFoundError(UnaskedError):
 
 class ExecutionError(UnaskedError):
     code = "EXECUTION_FAILED"
+
+
+class ConcurrentModificationError(UnaskedError):
+    """A prepared evidence graph changed before its atomic commit."""
+
+    code = "CONCURRENT_MODIFICATION"

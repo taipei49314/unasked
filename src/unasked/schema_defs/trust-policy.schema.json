@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.unasked.dev/v0.4/trust-policy.schema.json",
+  "title": "UNASKED external trust policy",
+  "type": "object",
+  "required": ["schema_version", "policy_id", "mode", "issued_at", "valid_from", "valid_until", "algorithm", "dsse_payload_type", "statement_type", "keys", "thresholds", "predicate_roles", "separation"],
+  "properties": {
+    "schema_version": {"const": "0.4.0"},
+    "policy_id": {"$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier"},
+    "mode": {"enum": ["PRODUCTION", "SHADOW"]},
+    "issued_at": {"$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/timestamp"},
+    "valid_from": {"$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/timestamp"},
+    "valid_until": {"$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/timestamp"},
+    "algorithm": {"const": "Ed25519"},
+    "dsse_payload_type": {"const": "application/vnd.in-toto+json"},
+    "statement_type": {"const": "https://in-toto.io/Statement/v1"},
+    "keys": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/key"}},
+    "thresholds": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/threshold"}},
+    "predicate_roles": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/predicateRole"}},
+    "separation": {"$ref": "#/$defs/separation"}
+  },
+  "allOf": [
+    {"if": {"properties": {"mode": {"const": "PRODUCTION"}}, "required": ["mode"]}, "then": {"properties": {"separation": {"properties": {"unique_public_keys": {"const": true}, "one_role_per_key": {"const": true}, "distinct_actor_ids_across_roles": {"const": true}}}}}}
+  ],
+  "$defs": {
+    "role": {"enum": ["DISCOVERY_AUTHORITY", "CUSTODIAN", "ISOLATION_ATTESTER", "LEDGER_WITNESS", "TRIAL_EVALUATOR", "M0_CERTIFIER"]},
+    "predicateType": {"enum": ["https://schemas.unasked.dev/attestations/authority-authorization/v0.4", "https://schemas.unasked.dev/attestations/custody/v0.4", "https://schemas.unasked.dev/attestations/isolation/v0.4", "https://schemas.unasked.dev/attestations/ledger-checkpoint/v0.4", "https://schemas.unasked.dev/attestations/trial-evaluation/v0.4", "https://schemas.unasked.dev/attestations/m0-certification/v0.4"]},
+    "key": {
+      "type": "object", "additionalProperties": false,
+      "required": ["key_id", "actor_id", "role", "status", "public_key_base64", "valid_from", "valid_until"],
+      "properties": {
+        "key_id": {"$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier"},
+        "actor_id": {"$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier"},
+        "role": {"$ref": "#/$defs/role"},
+        "status": {"enum": ["ACTIVE", "REVOKED"]},
+        "public_key_base64": {"type": "string", "minLength": 1},
+        "valid_from": {"$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/timestamp"},
+        "valid_until": {"$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/timestamp"}
+      }
+    },
+    "threshold": {
+      "type": "object", "additionalProperties": false, "required": ["role", "minimum_signatures"],
+      "properties": {"role": {"$ref": "#/$defs/role"}, "minimum_signatures": {"type": "integer", "minimum": 1}}
+    },
+    "predicateRole": {
+      "type": "object", "additionalProperties": false, "required": ["predicate_type", "role"],
+      "properties": {"predicate_type": {"$ref": "#/$defs/predicateType"}, "role": {"$ref": "#/$defs/role"}}
+    },
+    "separation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["unique_public_keys", "one_role_per_key", "distinct_actor_ids_across_roles"],
+      "properties": {"unique_public_keys": {"type": "boolean"}, "one_role_per_key": {"type": "boolean"}, "distinct_actor_ids_across_roles": {"type": "boolean"}}
+    }
+  }
+}

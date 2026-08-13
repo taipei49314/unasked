@@ -10,6 +10,7 @@ from typing import Any
 
 from unasked import CLAIM, __version__
 from unasked.artifacts import ArtifactStore
+from unasked.attestations import read_exact_bytes
 from unasked.authority import AuthorityKernel
 from unasked.baseline import run_deterministic_baseline
 from unasked.budget import BudgetPolicy
@@ -34,7 +35,8 @@ from unasked.schemas import (
     list_schemas,
     validate,
 )
-from unasked.trials import aggregate_trials, audit_trial_evidence, certify_m0
+from unasked.trials import aggregate_trials, audit_trial_evidence, certify_m0, certify_m0_v2
+from unasked.trust import PREDICATE_ROLES, load_trust_policy, verify_dsse_statement
 from unasked.util import canonical_json, ensure_within, read_json
 from unasked.workflow import InvestigationService
 
@@ -227,7 +229,8 @@ def _baseline_run(args: argparse.Namespace) -> Any:
         original_name="deterministic-baseline.json",
     )
     actor = Actor(args.actor, "explorer")
-    project.ledger(args.run).append(
+    project.append_event(
+        args.run,
         result["integration"]["ledger_event_type"],
         {
             "baseline_run_id": result["baseline_run_id"],
@@ -250,10 +253,54 @@ def _trials_evaluate(args: argparse.Namespace) -> Any:
 
 
 def _trials_certify(args: argparse.Namespace) -> Any:
+    v2_names = (
+        "certification_envelope",
+        "trial_evaluation_envelope",
+        "trust_policy",
+        "trust_policy_sha256",
+        "manifest",
+        "custody_envelope",
+        "evidence_index",
+        "audit",
+        "run_matrix",
+    )
+    supplied = {name for name in v2_names if getattr(args, name, None) is not None}
+    if supplied:
+        missing = sorted(set(v2_names) - supplied)
+        if missing:
+            raise UsageError(
+                "Trials certify v2 inputs must be supplied as one complete set.",
+                details={"missing": missing},
+            )
+        return certify_m0_v2(
+            read_exact_bytes(args.certification_envelope),
+            read_exact_bytes(args.trial_evaluation_envelope),
+            trust_policy_bytes=read_exact_bytes(args.trust_policy),
+            trust_policy_sha256=args.trust_policy_sha256,
+            manifest_bytes=read_exact_bytes(args.manifest),
+            custody_envelope_bytes=read_exact_bytes(args.custody_envelope),
+            report_bytes=read_exact_bytes(args.report),
+            evidence_index_bytes=read_exact_bytes(args.evidence_index),
+            audit_bytes=read_exact_bytes(args.audit),
+            run_matrix_bytes=read_exact_bytes(args.run_matrix),
+            base_path=Path(args.run_matrix).expanduser().resolve().parent,
+        )
     report = _load_json(args.report)
     if not isinstance(report, dict):
         raise UsageError("Trials certify requires one report object.")
-    return certify_m0(report)
+    try:
+        certify_m0(report)
+    except PolicyError:
+        return {
+            "status": "M0_NOT_DEMONSTRATED",
+            "m0_demonstrated": False,
+            "claim": "M0_NOT_DEMONSTRATED",
+            "legacy_structural_audit_authoritative": False,
+            "authenticated_v2_audit": False,
+            "report_hash": report.get("report_hash"),
+            "reason_codes": ["AUTHENTICATED_V2_EVIDENCE_NOT_PROVIDED"],
+        }
+    raise IntegrityError("Legacy M0 certification unexpectedly became authoritative.")
 
 
 def _trials_audit(args: argparse.Namespace) -> Any:
@@ -263,6 +310,44 @@ def _trials_audit(args: argparse.Namespace) -> Any:
         raise UsageError("Trials audit requires report and evidence-index JSON objects.")
     base_path = Path(args.evidence_index).expanduser().resolve().parent
     return audit_trial_evidence(report, evidence_index, base_path=base_path)
+
+
+def _attestations_verify(args: argparse.Namespace) -> Any:
+    policy_bytes = read_exact_bytes(args.trust_policy)
+    envelope_bytes = read_exact_bytes(args.envelope)
+    policy = load_trust_policy(
+        policy_bytes,
+        expected_sha256=args.trust_policy_sha256,
+    )
+    try:
+        _, predicate_schema = PREDICATE_ROLES[args.predicate_type]
+    except KeyError as exc:
+        raise UsageError(
+            "Predicate type is not a supported UNASKED v0.4 attestation type.",
+            details={"predicate_type": args.predicate_type},
+        ) from exc
+    verified = verify_dsse_statement(
+        envelope_bytes,
+        expected_predicate_type=args.predicate_type,
+        trusted_keys=policy.keys_for(args.predicate_type),
+        threshold=policy.threshold_for(args.predicate_type),
+        predicate_schema=predicate_schema,
+    )
+    return {
+        "status": "AUTHENTICATED_STATEMENT",
+        "predicate_type": args.predicate_type,
+        "predicate_id": verified.predicate["predicate_id"],
+        "payload_sha256": verified.payload_sha256,
+        "trust_policy_sha256": policy.sha256,
+        "trust_mode": verified.trust_mode,
+        "signer_fingerprints": list(verified.signer_fingerprints),
+        "signer_key_ids": list(verified.signer_key_ids),
+        "signer_actor_ids": list(verified.signer_actor_ids),
+        "production_qualified_predicate": verified.production_qualified,
+        "subject_binding": "NOT_CHECKED",
+        "authorizes_verified": False,
+        "m0_demonstrated": False,
+    }
 
 
 def _expectations_add(args: argparse.Namespace) -> Any:
@@ -396,43 +481,17 @@ def _verify(args: argparse.Namespace) -> Any:
     authority = Actor(args.actor, "human_judge")
     if args.check_only:
         return kernel.evaluate(args.run, args.candidate, authority=authority).to_dict()
-    return kernel.authorize(args.run, args.candidate, authority=authority)
+    raise PolicyError(
+        "Legacy CLI authorization cannot create authenticated VERIFIED state; "
+        "use the Authority v2 exact-input API."
+    )
 
 
 def _report(args: argparse.Namespace) -> Any:
-    project = _open_project(args)
-    certificates: list[dict[str, Any]] = []
-    for run in project.list_runs():
-        run_id = run["run_id"]
-        for candidate in project.list_candidates(run_id):
-            if candidate["current_state"] != "VERIFIED":
-                continue
-            certificate_path = (
-                project.candidate_dir(run_id, candidate["candidate_id"]) / "certificate.yaml"
-            )
-            certificate = read_json(certificate_path)
-            issues = validate("discovery-certificate", certificate)
-            if issues:
-                raise IntegrityError(
-                    "A VERIFIED certificate fails its schema.",
-                    details={
-                        "path": str(certificate_path),
-                        "errors": [issue.to_dict() for issue in issues],
-                    },
-                )
-            audit = AuthorityKernel(project).audit_certificate(run_id, candidate["candidate_id"])
-            if not audit["valid"]:
-                raise IntegrityError(
-                    "A VERIFIED certificate fails evidence re-authorization.",
-                    details={
-                        "path": str(certificate_path),
-                        "audit": audit,
-                    },
-                )
-            certificates.append(certificate)
-    if not certificates:
-        return {"status": "NO_VERIFIED_DISCOVERY", "certificates": []}
-    return {"status": "VERIFIED_DISCOVERIES", "certificates": certificates}
+    _open_project(args)
+    # This command has no exact external attestation/policy inputs with which to run
+    # audit_certificate_v2. Local/legacy VERIFIED labels therefore remain unpublished.
+    return {"status": "NO_VERIFIED_DISCOVERY", "certificates": []}
 
 
 def _ledger_export(args: argparse.Namespace) -> Any:
@@ -476,7 +535,8 @@ def _artifacts_add(args: argparse.Namespace) -> Any:
         media_type=args.media_type,
         original_name=Path(args.file).name,
     )
-    project.ledger(args.run).append(
+    project.append_event(
+        args.run,
         "ARTIFACT_IMPORTED",
         {"sha256": metadata.sha256, "source_name": Path(args.file).name},
         actor=actor.to_dict(),
@@ -646,10 +706,37 @@ def _command_parser() -> Parser:
     trial_audit.set_defaults(handler=_trials_audit, command_name="trials audit")
     trial_certify = trial_commands.add_parser(
         "certify",
-        help="Recompute, then deny until an external evidence verifier is implemented.",
+        help="Authenticate a complete v0.4 matrix, or preserve legacy fail-closed behavior.",
     )
     trial_certify.add_argument("--report", required=True)
+    trial_certify.add_argument("--certification-envelope")
+    trial_certify.add_argument("--trial-evaluation-envelope")
+    trial_certify.add_argument("--trust-policy")
+    trial_certify.add_argument("--trust-policy-sha256")
+    trial_certify.add_argument("--manifest")
+    trial_certify.add_argument("--custody-envelope")
+    trial_certify.add_argument("--evidence-index")
+    trial_certify.add_argument("--audit")
+    trial_certify.add_argument("--run-matrix")
     trial_certify.set_defaults(handler=_trials_certify, command_name="trials certify")
+
+    attestations = commands.add_parser(
+        "attestations",
+        help="Cryptographically verify externally rooted DSSE attestations.",
+    )
+    attestation_commands = attestations.add_subparsers(dest="attestation_command", required=True)
+    attestation_verify = attestation_commands.add_parser(
+        "verify",
+        help="Verify an envelope and predicate without granting subject-bound authority.",
+    )
+    attestation_verify.add_argument("--envelope", required=True)
+    attestation_verify.add_argument("--predicate-type", required=True)
+    attestation_verify.add_argument("--trust-policy", required=True)
+    attestation_verify.add_argument("--trust-policy-sha256", required=True)
+    attestation_verify.set_defaults(
+        handler=_attestations_verify,
+        command_name="attestations verify",
+    )
 
     expectations = commands.add_parser("expectations", help="Register sourced expectations.")
     expectation_commands = expectations.add_subparsers(dest="expectation_command", required=True)
@@ -903,6 +990,7 @@ def main(argv: list[str] | None = None) -> int:
             "INTEGRITY_ERROR": 4,
             "NOT_FOUND": 5,
             "EXECUTION_FAILED": 6,
+            "CONCURRENT_MODIFICATION": 7,
         }
         payload = {
             "ok": False,

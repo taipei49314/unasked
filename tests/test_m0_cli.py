@@ -187,6 +187,7 @@ def test_trials_cli_evaluates_unsealed_but_refuses_certification(tmp_path: Path,
 
     certify_code = main(["--json", "trials", "certify", "--report", str(report_path)])
     rejected = json.loads(capsys.readouterr().out)
-    assert certify_code == 3
-    assert rejected["error"]["code"] == "POLICY_DENIED"
+    assert certify_code == 0
+    assert rejected["data"]["status"] == "M0_NOT_DEMONSTRATED"
+    assert rejected["data"]["m0_demonstrated"] is False
     assert rejected["command"] == "trials certify"

@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://schemas.unasked.dev/attestations/isolation/v0.4",
+  "title": "UNASKED isolation attestation predicate", "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "predicate_id", "issued_at", "issuer_actor_id", "trust_policy_sha256", "suite_id", "case_id", "variant", "run_id", "started_at", "completed_at", "target_snapshot_hash", "protocol_hash", "executor_actor_id", "isolation_class", "network_mode", "filesystem_mode", "input_manifest_sha256", "command_records_sha256", "output_manifest_sha256", "residual_state_detected"],
+  "properties": {
+    "schema_version": {"const": "0.4.0"}, "predicate_id": {"$ref": "#/$defs/id"}, "issued_at": {"$ref": "#/$defs/time"}, "issuer_actor_id": {"$ref": "#/$defs/id"}, "trust_policy_sha256": {"$ref": "#/$defs/hash"},
+    "suite_id": {"$ref": "#/$defs/id"}, "case_id": {"$ref": "#/$defs/id"}, "variant": {"$ref": "#/$defs/variant"}, "run_id": {"$ref": "#/$defs/id"}, "started_at": {"$ref": "#/$defs/time"}, "completed_at": {"$ref": "#/$defs/time"}, "target_snapshot_hash": {"$ref": "#/$defs/hash"}, "protocol_hash": {"$ref": "#/$defs/hash"}, "executor_actor_id": {"$ref": "#/$defs/id"}, "isolation_class": {"enum": ["EXTERNAL_SEALED", "LOCAL_RESTRICTED", "SUBPROCESS"]}, "network_mode": {"enum": ["DENY_ALL", "UNRESTRICTED", "UNKNOWN"]}, "filesystem_mode": {"enum": ["IMMUTABLE_INPUT_ISOLATED_OUTPUT", "HOST_SHARED", "UNKNOWN"]}, "input_manifest_sha256": {"$ref": "#/$defs/hash"}, "command_records_sha256": {"$ref": "#/$defs/hash"}, "output_manifest_sha256": {"$ref": "#/$defs/hash"}, "residual_state_detected": {"type": "boolean"}
+  },
+  "$defs": {"id": {"$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier"}, "hash": {"$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256"}, "time": {"$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/timestamp"}, "variant": {"enum": ["deterministic-detectors-only", "read-only-llm-reviewer", "llm-tools-no-experiment-gate", "experiment-loop-without-falsifier", "full-evidence-gated-system"]}}
+}

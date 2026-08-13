@@ -3,8 +3,9 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
+from functools import wraps
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from unasked import CLAIM, __version__
 from unasked.artifacts import ArtifactStore
@@ -33,6 +34,20 @@ class InvestigationMode(StrEnum):
 
 
 _TOOL_ACTIONS = frozenset({"LIST_FILES", "READ_FILE", "SEARCH", "HASH_TEXT"})
+_T = TypeVar("_T")
+
+
+def _compound_explorer_mutation(method: Callable[..., _T]) -> Callable[..., _T]:
+    """Serialize one bounded investigation with all other cooperating run writers."""
+
+    @wraps(method)
+    def wrapped(self: BoundedExplorer, run_id: str, *args: Any, **kwargs: Any) -> _T:
+        with self.project.mutation(run_id):
+            return method(self, run_id, *args, **kwargs)
+
+    return wrapped
+
+
 _ALL_ACTIONS = frozenset({*_TOOL_ACTIONS, "PROPOSE", "STOP"})
 _EXPECTATION_KEYS = frozenset(
     {
@@ -574,6 +589,7 @@ class BoundedExplorer:
             )
         return {"action": "STOP", "reason": action.get("reason", "PROVIDER_STOPPED")}
 
+    @_compound_explorer_mutation
     def run(
         self,
         run_id: str,
@@ -771,33 +787,35 @@ class BoundedExplorer:
             action_result_ref = action_result_meta.to_reference()
             artifact_refs.append(action_result_ref)
             turn_refs.extend(artifact_refs)
-            turn = append_jsonl(
-                turns_path,
-                {
-                    "schema_version": "0.1.0",
-                    "run_id": run_id,
-                    "turn": meter.turns,
-                    "occurred_at": utc_now(),
-                    "request_ref": request_meta.to_reference(),
-                    "response_ref": response_meta.to_reference(),
-                    "stderr_ref": stderr_ref,
-                    "provider_exit_code": response.exit_code,
-                    "action": action_name,
-                    "action_status": action_status,
-                    "action_result_ref": action_result_ref,
-                },
-            )
-            self.project.ledger(run_id).append(
-                "EXPLORER_TURN_RECORDED",
-                {
-                    "turn": meter.turns,
-                    "action": action_name,
-                    "action_status": action_status,
-                    "turn_record_hash": turn["record_hash"],
-                },
-                actor=actor.to_dict(),
-                artifact_refs=artifact_refs,
-            )
+            with self.project.mutation(run_id):
+                turn = append_jsonl(
+                    turns_path,
+                    {
+                        "schema_version": "0.1.0",
+                        "run_id": run_id,
+                        "turn": meter.turns,
+                        "occurred_at": utc_now(),
+                        "request_ref": request_meta.to_reference(),
+                        "response_ref": response_meta.to_reference(),
+                        "stderr_ref": stderr_ref,
+                        "provider_exit_code": response.exit_code,
+                        "action": action_name,
+                        "action_status": action_status,
+                        "action_result_ref": action_result_ref,
+                    },
+                )
+                self.project.append_event(
+                    run_id,
+                    "EXPLORER_TURN_RECORDED",
+                    {
+                        "turn": meter.turns,
+                        "action": action_name,
+                        "action_status": action_status,
+                        "turn_record_hash": turn["record_hash"],
+                    },
+                    actor=actor.to_dict(),
+                    artifact_refs=artifact_refs,
+                )
             last_result = action_result
             if provider_failed or status == "BUDGET_EXHAUSTED":
                 break
