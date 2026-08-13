@@ -392,31 +392,11 @@ class AuthorityKernel:
         except Exception:
             replay_outputs_bound = False
 
-        isolation = replay_environment.get("isolation_attestation", {})
-        receipt = isolation.get("receipt_ref", {})
-        receipt_digest = receipt.get("sha256", "")
-        receipt_valid = (
-            isinstance(receipt_digest, str)
-            and len(receipt_digest) == 64
-            and all(character in "0123456789abcdef" for character in receipt_digest)
-            and self.store.verify(receipt_digest).valid
-        )
-        external_isolation_attested = all(
-            (
-                replay_environment.get("adapter") != "local_restricted",
-                isinstance(isolation.get("issuer"), str),
-                bool(isolation.get("issuer")),
-                set(isolation.get("claims", []))
-                == {
-                    "NETWORK_ISOLATED",
-                    "RESOURCE_LIMITS_ENFORCED",
-                    "SECRET_FREE",
-                },
-                receipt.get("artifact_id") == f"sha256:{receipt_digest}",
-                receipt.get("uri") == f"cas://sha256/{receipt_digest}",
-                receipt_valid,
-            )
-        )
+        # External receipt bundles are retained as evidence, but the released
+        # verifier has no independently configured signature trust root yet.
+        # Treating self-declared issuer strings or CAS presence as authentication
+        # would allow the evidence producer to authorize itself.
+        external_isolation_attested = False
         clean_replay_passed = all(
             (
                 replay.get("status") == "PASS",

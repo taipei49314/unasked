@@ -28,7 +28,7 @@ hash against `SHA256SUMS.txt`, then install it. The following PowerShell example
 published checksum and downloaded wheel differ:
 
 ```powershell
-$version = "0.2.1"
+$version = "0.2.2"
 $wheel = "unasked_research-$version-py3-none-any.whl"
 $release = "https://github.com/taipei49314/unasked/releases/download/v$version"
 Invoke-WebRequest "$release/$wheel" -OutFile $wheel
@@ -57,9 +57,11 @@ unasked --json doctor
 The evidence core and scripted development provider are offline and do not use credentials.
 The optional JSON-subprocess provider bridge launches one local argv-only executable with a
 secret-stripped environment, a combined stdout/stderr cap, and the investigation's remaining
-wall-time bound. Provider scripts or model files can be named in `bound_files` so their hashes
-are frozen and rechecked around execution. UNASKED does not prove that the provider process
-itself is network-isolated. Repository experiments use an executable allowlist, bounded
+wall-time bound. UNASKED terminates its ordinary descendant process tree after success,
+timeout, or output overflow (Windows Job Object; POSIX process group). Provider scripts or
+model files can be named in `bound_files` so their hashes are frozen and rechecked around
+execution. This lifecycle control is not a hostile-provider OS sandbox and does not prove
+network isolation. Repository experiments use an executable allowlist, bounded
 timeout, and fresh detached repositories. Formal evidence still requires an external
 container/VM adapter that
 records enforced network, secret, process, CPU, and disk isolation.
@@ -118,9 +120,10 @@ The authority kernel therefore refuses `VERIFIED` even when local replay passes.
 isolated reproducer must first import all CAS artifacts with `artifacts add`, then use
 `replay import` with independently produced replay and environment manifests.
 The imported environment must bind the target, frozen plan, executable set, independent
-command-result records, and a CAS-backed isolation receipt. The receipt issuer remains an
-external trust assumption in the v0.1 evidence protocol; it is not a cryptographic platform
-attestation.
+command-result records, and a CAS-backed isolation receipt whose structured subject must bind
+the replay inputs and outputs. Because v0.2.2 has no independently configured signature trust
+root, the authority kernel deliberately treats every imported receipt as unauthenticated:
+the evidence may be retained and reach `REPRODUCED`, but it cannot authorize `VERIFIED`.
 
 `report --verified-only` does not trust a certificate merely because the file exists. It
 re-runs the frozen gate registry and verifies the verdict, complete CAS reference closure,
@@ -177,7 +180,8 @@ Diagnostics go to stderr. No auth tokens are accepted or printed.
 
 ## Evidence layout
 
-Each workspace contains immutable run metadata, a hash-chained event ledger, append-only
+Each workspace contains immutable run metadata, a hash-chained event ledger whose
+verify-plus-append transaction is serialized across local threads and processes, append-only
 observation/expectation records, content-addressed artifacts, and candidate bundles matching
 the layout in the North Star charter. SQLite is a rebuildable lookup index only; JSON,
 JSONL, raw outputs, and their hashes remain the source of truth.

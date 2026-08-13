@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-__version__ = "0.2.1"
+__version__ = "0.2.2"
 PROTOCOL_VERSION = "0.1.0-p0"
 CLAIM = "A research harness for blind, evidence-gated repository investigation."
 

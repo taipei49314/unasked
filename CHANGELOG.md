@@ -3,6 +3,25 @@
 All notable software changes are recorded here. Milestone claims remain governed by
 `constitution/CLAIMS_POLICY.md` and require independent evidence beyond a software release.
 
+## 0.2.2 — 2026-08-13
+
+### Security
+
+- Terminate the JSON-subprocess provider's ordinary descendant process tree on timeout,
+  combined-output overflow, and normal parent exit by using a Windows Job Object or POSIX
+  process group.
+- Serialize the ledger's full-chain scan and durable append with a per-ledger thread and OS
+  file lock, preventing duplicate sequences and parent hashes under concurrent writers.
+- Parse and bind external isolation receipt subjects to replay inputs and outputs, but keep
+  every imported receipt unauthenticated and ineligible for `VERIFIED` until an external
+  signature trust root is implemented.
+
+### Claim boundary
+
+This release remains `NON_CERTIFYING` with `m0_demonstrated=false`. An imported replay may be
+recorded as `REPRODUCED`, but no external receipt can satisfy the authorization gate in this
+version.
+
 ## 0.2.1 — 2026-08-11
 
 ### Added

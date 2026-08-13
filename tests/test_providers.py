@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+import time
 from pathlib import Path
 from time import monotonic
 
@@ -80,6 +81,81 @@ def test_json_subprocess_provider_honors_smaller_budget_timeout() -> None:
         )
 
     assert monotonic() - started < 2
+
+
+def _provider_that_leaves_a_child(
+    marker: Path,
+    *,
+    parent_sleep: float,
+    overflow: bool = False,
+) -> str:
+    child = (
+        "import pathlib,time; "
+        "time.sleep(0.75); "
+        f"pathlib.Path({str(marker)!r}).write_text('survived', encoding='utf-8')"
+    )
+    return (
+        "import subprocess,sys,time; "
+        "sys.stdin.read(); "
+        f"subprocess.Popen([sys.executable, '-c', {child!r}], "
+        "stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, "
+        "stderr=subprocess.DEVNULL, close_fds=True); "
+        + ("sys.stdout.write('x' * 100000); sys.stdout.flush(); " if overflow else "")
+        + f"time.sleep({parent_sleep})"
+    )
+
+
+def test_json_subprocess_provider_timeout_kills_descendant_processes(tmp_path: Path) -> None:
+    marker = tmp_path / "timeout-child-survived"
+    provider = JsonSubprocessProvider(
+        [sys.executable, "-c", _provider_that_leaves_a_child(marker, parent_sleep=10)],
+        model_name="timeout-tree-model",
+        timeout_seconds=10,
+    )
+
+    with pytest.raises(ExecutionError, match="timed out"):
+        provider.invoke(
+            {"request": "bounded"},
+            max_output_bytes=1024,
+            timeout_seconds=0.25,
+        )
+
+    time.sleep(1)
+    assert not marker.exists()
+
+
+def test_json_subprocess_provider_normal_exit_kills_orphan_descendants(tmp_path: Path) -> None:
+    marker = tmp_path / "successful-parent-child-survived"
+    provider = JsonSubprocessProvider(
+        [sys.executable, "-c", _provider_that_leaves_a_child(marker, parent_sleep=0)],
+        model_name="successful-tree-model",
+        timeout_seconds=10,
+    )
+
+    response = provider.invoke({"request": "bounded"}, max_output_bytes=1024)
+
+    assert response.exit_code == 0
+    time.sleep(1)
+    assert not marker.exists()
+
+
+def test_json_subprocess_provider_output_overflow_kills_descendants(tmp_path: Path) -> None:
+    marker = tmp_path / "overflow-child-survived"
+    provider = JsonSubprocessProvider(
+        [
+            sys.executable,
+            "-c",
+            _provider_that_leaves_a_child(marker, parent_sleep=10, overflow=True),
+        ],
+        model_name="overflow-tree-model",
+        timeout_seconds=10,
+    )
+
+    response = provider.invoke({"request": "bounded"}, max_output_bytes=1024)
+
+    assert response.exit_code == 75
+    time.sleep(1)
+    assert not marker.exists()
 
 
 def test_json_subprocess_provider_rechecks_bound_files(tmp_path: Path) -> None:
