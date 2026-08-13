@@ -9,10 +9,10 @@ model-provider executable, repository/context exfiltration by a provider that ca
 the network, fabricated external custody/replay attestations, unauthenticated actor-role
 claims, and rollback or deletion by a local user who controls the evidence workspace. The
 current local executor and JSON-subprocess provider are deliberately treated as recorders and
-policy reducers, not security sandboxes. The authority kernel still fails closed unless an
-external adapter supplies enforced network, secret, CPU, disk, and process claims plus a
-content-addressed isolation receipt. The receipt is integrity-bound but its issuer is not
-cryptographically authenticated in v0.1.
+policy reducers, not security sandboxes. External replay receipts are structurally bound to
+their replay subject and retained as evidence, but v0.2.2 has no independently configured
+signature trust root. The authority kernel therefore treats every imported receipt as
+unauthenticated and refuses to use it to authorize `VERIFIED`.
 
 ## Scope and assumptions
 
@@ -33,7 +33,8 @@ Assumptions, retained because the user requested autonomous progress without que
   provide durable off-host retention or rollback prevention.
 - Actor IDs and roles are declarations, not authenticated principals.
 - External benchmark custody and isolated replay receipts are organizational controls whose
-  issuer authenticity is not cryptographically verified by v0.1.
+  issuer authenticity is not cryptographically verified; imported receipts cannot authorize
+  `VERIFIED` in v0.2.2.
 - No runtime secrets are required. An allowlisted experiment or provider child process may
   still read host files or use the network unless an external OS/container boundary prevents
   it; the provider bridge's reduced environment is not a confidentiality boundary.
@@ -92,8 +93,10 @@ authenticated, and whether ledger checkpoints will be signed or stored off-host.
   observations, prior tool results, and budget state crosses stdio. Combined stdout/stderr is
   capped, invocation timeout is limited by the remaining aggregate wall budget, declared
   provider files are hash-bound, raw bytes are retained in CAS, and stdout is parsed as exactly
-  one action-whitelisted JSON object. The child can nevertheless read host files or contact a
-  network under the operator's OS account.
+  one action-whitelisted JSON object. Ordinary descendants are terminated through a Windows
+  Job Object or POSIX process group on every exit path. The child can nevertheless read host
+  files, contact a network, or deliberately evade a POSIX process group under the operator's
+  OS account.
 - Explorer → immutable snapshot tools/workflow: literal file reads/searches consume Git-object
   bytes, while accepted proposals pass through the existing expectation/candidate/plan APIs.
   No Explorer action exposes challenge, replay, verdict, certificate, or publish authority.
@@ -101,8 +104,9 @@ authenticated, and whether ledger checkpoints will be signed or stored off-host.
   and CAS. SHA-256, canonical encoding, sequence chaining, and write-once APIs protect
   integrity but not deletion or old-snapshot rollback by the host user.
 - External custodian/reproducer → import commands: manifest hashes, attestations, replay JSON,
-  environment claims, and artifact references enter from outside. Schemas and CAS hashes are
-  checked; signer identity and actual isolation are externally trusted.
+  environment claims, and artifact references enter from outside. Schemas, CAS hashes, and
+  replay-receipt subject bindings are checked; signer identity and actual isolation are not
+  authenticated, so the receipt cannot satisfy the authorization gate.
 - Evidence workspace → authority kernel → certificate: references and state history cross an
   authority boundary. Every deterministic gate must pass, proposer/authority IDs must differ,
   and the certificate is written before the `VERIFIED` state transition.
@@ -178,7 +182,7 @@ flowchart LR
 | Git object database | `init`, `observe`, `replay` | Target → observer/worktree | Fixed SHA/object reads; replace refs, lazy promisor fetches, interaction, source config/includes, ambient `GIT_*`, source alternates, and linked object-database entries are rejected or isolated; Git 2.45+ is required; the Git executable is frozen once per operation; checkout objects are repacked locally before the worktree is exposed | `src/unasked/executables.py`; `src/unasked/repository.py`; `src/unasked/observer.py` |
 | Experiment argv | `experiments execute`, `replay run` | Plan → child process | No shell; current/relative/worktree PATH entries are ignored; model-authored Git is rejected after executable resolution; the internal no-follow mutation manifest covers tracked, staged, untracked, and temporary Git-metadata changes; an explicitly allowlisted interpreter is still powerful | `src/unasked/sandbox.py` / `RestrictedExecutor.execute`; `src/unasked/workflow.py` |
 | Artifact import | `artifacts add` | External bytes → CAS | Size is not globally budgeted | `src/unasked/artifacts.py` / `put_file` |
-| External replay | `replay import` | Reproducer → authority inputs | Hash/schema checks, no signature verification | `src/unasked/workflow.py` / `import_external_replay` |
+| External replay | `replay import` | Reproducer → authority inputs | Hash/schema/subject-binding checks; no signature verifier, so imported receipts cannot authorize `VERIFIED` | `src/unasked/workflow.py` / `import_external_replay` |
 | Custody attestation | `attest custody` | Custodian → blindness gate | Actor and external store are declarations | `src/unasked/workflow.py` / `record_custody_attestation` |
 | Raw bounded read | `raw read` | Workspace → operator | Root confinement and byte cap; UTF-8 only | `src/unasked/cli.py` / `_raw_read` |
 | Provider configuration | `investigate --provider-config` | Operator file → local subprocess | Exactly one adapter; argv-only; secret-stripped environment; executable/declared bound-file hashes frozen and rechecked | `src/unasked/providers.py` / `provider_from_config`, `JsonSubprocessProvider` |
@@ -196,22 +200,23 @@ flowchart LR
    paper and inflates a claim.
 3. A host user restores an older valid workspace snapshot → internal hashes still verify → a
    revocation or later falsifying event disappears without an external checkpoint.
-4. Two processes append after reading the same ledger tail → duplicate sequence/hash ancestry
-   is created → future verification fails and the run becomes unavailable.
+4. A host user bypasses the ledger API or rolls back the workspace and its lock together → a
+   locally self-consistent but stale history can replace the latest run → no external
+   checkpoint detects it.
 5. A huge repository or artifact is observed/imported → memory, disk, or time is exhausted →
    investigation availability is lost before budget policy can intervene.
 6. A protocol with the exact implemented gate registry but an unapproved policy identity is
    supplied → a run is internally consistent but lacks external policy approval → downstream
    users misread its certificate context.
 7. A dishonest external reproducer supplies genuine CAS bytes plus false environment claims →
-   replay schema and hashes pass → isolation is overstated unless signed platform evidence is
-   independently checked.
+   replay schema and hashes pass → evidence can be recorded as `REPRODUCED`, but the authority
+   gate remains false until signed platform evidence is independently checked.
 8. An operator selects a compromised provider executable → the bridge launches it under the
    user's account → it reads repository/context or unrelated host files and exfiltrates them
    because network isolation is only recorded as unproven.
-9. A provider emits oversized or repeatedly invalid output → the streaming cap kills the
-   parent and turns are consumed → the bounded investigation stops, but spawned descendants
-   or other host resources can remain outside UNASKED's control.
+9. A hostile POSIX provider deliberately creates a new session before termination → the
+   ordinary provider process group is killed → the escaped process or other host resources
+   can remain outside UNASKED's lifecycle control.
 10. A developer labels scripted responses or a self-declared sealed trial manifest as model
     performance → deterministic metrics look strong → an audience ignores the hard-coded
     non-certifying result and falsely narrates engineering plumbing as M0.
@@ -226,11 +231,11 @@ flowchart LR
 | TM-004 | Explorer/developer | Access to benchmark infrastructure | Read hidden cases, evaluator, or fixture names before/during run | Invalid blind-evaluation result | Hidden benchmark, blindness evidence | Private benchmark omitted; custody protocol and context manifest (`custody/`, `src/unasked/project.py`) | Custody/access log authenticity is external | Separate accounts/repos, deny Explorer ACL, signed access logs, sealed case hashes before development | Audit all benchmark reads; compare seal time with model/tool build time | Medium | High | High |
 | TM-005 | External reproducer/custodian | Import permission | Submit schema-valid but dishonest isolation/custody declarations | False clean replay or novelty authority | Replay, custody, verdict | Exact schemas, CAS verification, environment gate (`src/unasked/workflow.py`, `src/unasked/authority.py`) | No cryptographic signer or platform attestation | Require signed bundles, registered keys, reproducible container digest, TPM/cloud attestation where justified | Verify signatures and key roles; reject unknown adapter/build hashes | High | High | High |
 | TM-006 | Large/adversarial target | Repository or artifact ingestion | Exhaust memory, disk, file descriptors, or scan time | Denial of service and incomplete evidence | Availability, budget integrity | Command wall timeout and explicit raw-read cap (`src/unasked/sandbox.py`, `src/unasked/cli.py`) | Observer/CAS lack global file/count/byte budgets | Preflight Git object counts/sizes; streaming observers; workspace quota; max artifact size/count | Emit budget events and abort before crossing thresholds | Medium | Medium | Medium |
-| TM-007 | Concurrent operator processes | Same run used simultaneously | Race ledger append or immutable artifact creation | Integrity failure and unavailable run | Ledger availability | Full-chain verification before append; write-once files | No cross-process transaction/lock around verify-plus-append | OS file lock or single-writer service; compare-and-swap head file; retry with re-verification | Detect duplicate sequences and conflicting parent hashes | Medium | Medium | Medium |
+| TM-007 | Concurrent operator processes | Same run used simultaneously | Race ledger append or immutable artifact creation | Integrity failure and unavailable run | Ledger availability | Per-ledger thread plus OS file lock covers full-chain verification and fsync append; write-once files | No transaction spanning multiple workspace files; a host writer can bypass the API | Single-writer service or transactional index for multi-user deployment | Detect duplicate sequences and conflicting parent hashes | Low | Medium | Low |
 | TM-008 | Policy author/operator | Ability to pass `--protocol` | Bind a run to an externally unapproved protocol | Misleading policy provenance | Constitution, claims policy | Protocol hash frozen; `verified_requires` must exactly equal the single implemented P0 gate registry (`src/unasked/protocol.py`, `src/unasked/authority.py`) | No signed policy registry or approved-hash allowlist | Require protocol ID/hash from signed registry; expose policy diff; reject unknown hashes for public reports | Report protocol lineage and approval signature in `doctor` and certificate | Medium | High | High |
 | TM-009 | Malicious repository | Crafted refs/config/hooks/paths/symlinks/content | Redirect a pinned object, trigger lazy fetch or local executable lookup, execute checkout hooks/filters, attempt traversal, or inject misleading observations | Host execution/read, unexpected network access, or false evidence | Host, observation integrity | Fixed trusted-Git identity; `--no-replace-objects`; `--no-lazy-fetch`; noninteractive, config-isolated metadata views; local regular object-database closure; repacked temporary repositories; disabled hooks/fsmonitor; no-follow mutation capture and cleanup; ADS fail-closed; path and CAS validation (`src/unasked/executables.py`, `src/unasked/repository.py`, `src/unasked/workflow.py`, `src/unasked/util.py`, `src/unasked/artifacts.py`) | The selected Git implementation remains trusted; an explicitly allowed interpreter remains outside an OS filesystem/network boundary; future parsers may add unsafe extraction | Materialize in a disposable no-egress sandbox; validate object closure; use platform directory handles for stronger race resistance | Regression-test replace refs, source config/filters/hooks, PATH aliases, lazy-fetch denial, object links/alternates, root replacement, ADS, staged/untracked capture, and no-follow cleanup | Low | High | Medium |
-| TM-010 | Compromised or malicious provider executable | Operator selects `json-subprocess` configuration | Read host/repository data or contact external services with the operator's privileges | Confidentiality loss, host modification, invalid blindness | Host, source, context manifest, hidden evaluation | argv-only launch, reduced environment, executable/argv/provider-bundle hashes, optional bound-file pre/post checks, provider marked non-certifying and network-unproven (`src/unasked/providers.py`) | No OS filesystem, egress, CPU, process-tree, or identity boundary; undeclared remote/model assets and a narrow pre-spawn TOCTOU window remain external | Run provider in a disposable no-egress VM/container with read-only explicit inputs; attest image/model digest; use a dedicated low-privilege account | Capture process tree and egress counters; alert on provider hash drift or network activity | Medium | High | High |
-| TM-011 | Adversarial provider output | Provider can write stdout/stderr | Flood output, emit trailing JSON/prose, unauthorized fields, or repeatedly invalid actions | DoS, evidence pollution, attempted claim laundering | Availability, transcript, lifecycle integrity | streaming combined stdout/stderr cap kills the parent, remaining-wall timeout, exact one-object parser, strict action schema/whitelist, finite calls/turns/bytes/experiment commands, CAS transcript, no verify/publish actions (`src/unasked/budget.py`, `src/unasked/explorer.py`, `src/unasked/providers.py`) | Provider CPU/memory/process-tree resources are not limited; killing the parent is not a platform process-tree guarantee | Put the provider in an OS job/container with process-tree kill and CPU/memory quotas | Ledger rejection rate, overflow exit code, malformed-action counters, wall-budget exhaustion | Medium | Medium | Medium |
+| TM-010 | Compromised or malicious provider executable | Operator selects `json-subprocess` configuration | Read host/repository data or contact external services with the operator's privileges | Confidentiality loss, host modification, invalid blindness | Host, source, context manifest, hidden evaluation | argv-only launch, reduced environment, executable/argv/provider-bundle hashes, optional bound-file pre/post checks, ordinary-descendant termination via Windows Job Object or POSIX process group, provider marked non-certifying and network-unproven (`src/unasked/providers.py`) | No OS filesystem, egress, CPU, or identity boundary; a hostile POSIX child can create a new session; undeclared remote/model assets and a narrow pre-spawn TOCTOU window remain external | Run provider in a disposable no-egress VM/container with read-only explicit inputs; attest image/model digest; use a dedicated low-privilege account | Capture process tree and egress counters; alert on provider hash drift or network activity | Medium | High | High |
+| TM-011 | Adversarial provider output | Provider can write stdout/stderr | Flood output, emit trailing JSON/prose, unauthorized fields, or repeatedly invalid actions | DoS, evidence pollution, attempted claim laundering | Availability, transcript, lifecycle integrity | streaming combined stdout/stderr cap terminates the ordinary process tree, remaining-wall timeout, exact one-object parser, strict action schema/whitelist, finite calls/turns/bytes/experiment commands, CAS transcript, no verify/publish actions (`src/unasked/budget.py`, `src/unasked/explorer.py`, `src/unasked/providers.py`) | Provider CPU/memory are not quota-limited; POSIX session escape is possible for a hostile provider | Put the provider in an OS job/container with process-tree kill and CPU/memory quotas | Ledger rejection rate, overflow exit code, malformed-action counters, wall-budget exhaustion | Medium | Medium | Medium |
 | TM-012 | Developer/evaluator | Can author scripted responses or trial files | Present a scripted/unsealed/self-declared suite as proof of model discovery | False M0 narrative without a false per-candidate certificate | Claims policy, benchmark integrity, aggregate metrics | scripted provider has `certifying: false`; investigate and all v0.2 trial aggregates fix `m0_demonstrated: false`; `certify` recomputes then denies without the unimplemented external verifier (`src/unasked/explorer.py`, `src/unasked/trials.py`) | Custody/evaluator authenticity and evidence dereferencing are not yet implemented, so formal M0 cannot be issued by this version | Require signed custodian/evaluator bundles, per-finding certificate/CAS/ledger verification, chronology proof, public aggregate receipt, and independent replication | Alert on any public M0 wording emitted from v0.2; compare provider/build hash with seal timestamp | Medium | High | High |
 
 ## Criticality calibration

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import multiprocessing
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -8,6 +10,10 @@ from unasked.errors import IntegrityError
 from unasked.ledger import EventLedger
 from unasked.schemas import validate_or_raise
 from unasked.util import canonical_json, hash_json
+
+
+def _append_from_process(path: str, value: int) -> None:
+    EventLedger(path, run_id="run-processes").append("EVENT_RECORDED", {"value": value})
 
 
 def test_ledger_appends_a_canonical_hash_chain_and_reopens(tmp_path) -> None:
@@ -122,3 +128,35 @@ def test_ledger_exposes_no_overwrite_or_delete_api(tmp_path) -> None:
     assert not hasattr(ledger, "overwrite")
     assert not hasattr(ledger, "delete")
     assert not hasattr(ledger, "truncate")
+
+
+def test_ledger_serializes_concurrent_thread_appends(tmp_path) -> None:
+    path = tmp_path / "thread-events.jsonl"
+
+    def append(value: int) -> None:
+        EventLedger(path, run_id="run-threads").append("EVENT_RECORDED", {"value": value})
+
+    with ThreadPoolExecutor(max_workers=16) as executor:
+        list(executor.map(append, range(32)))
+
+    events = EventLedger(path, run_id="run-threads").read_all()
+    assert [event["sequence"] for event in events] == list(range(32))
+    assert {event["payload"]["value"] for event in events} == set(range(32))
+
+
+def test_ledger_serializes_concurrent_process_appends(tmp_path) -> None:
+    path = tmp_path / "process-events.jsonl"
+    context = multiprocessing.get_context("spawn")
+    processes = [
+        context.Process(target=_append_from_process, args=(str(path), value)) for value in range(8)
+    ]
+
+    for process in processes:
+        process.start()
+    for process in processes:
+        process.join(timeout=30)
+        assert process.exitcode == 0
+
+    events = EventLedger(path, run_id="run-processes").read_all()
+    assert [event["sequence"] for event in events] == list(range(8))
+    assert {event["payload"]["value"] for event in events} == set(range(8))

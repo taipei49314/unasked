@@ -4,7 +4,10 @@ import json
 import math
 import os
 import re
+import stat
+import threading
 from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -43,6 +46,63 @@ CAPABILITIES = frozenset(
         "PUBLISH",
     }
 )
+
+_THREAD_LOCKS_GUARD = threading.Lock()
+_THREAD_LOCKS: dict[str, threading.RLock] = {}
+
+
+def _thread_lock_for(path: Path) -> threading.RLock:
+    key = os.path.normcase(os.path.abspath(path))
+    with _THREAD_LOCKS_GUARD:
+        return _THREAD_LOCKS.setdefault(key, threading.RLock())
+
+
+@contextmanager
+def _exclusive_ledger_lock(path: Path) -> Iterator[None]:
+    """Serialize a ledger mutation across threads and processes."""
+
+    lock_path = path.with_name(f"{path.name}.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    thread_lock = _thread_lock_for(lock_path)
+    with thread_lock:
+        flags = os.O_CREAT | os.O_RDWR
+        for flag_name in ("O_BINARY", "O_CLOEXEC", "O_NOINHERIT", "O_NOFOLLOW"):
+            flags |= getattr(os, flag_name, 0)
+        descriptor = os.open(lock_path, flags, 0o600)
+        locked = False
+        try:
+            lock_stat = os.fstat(descriptor)
+            if not stat.S_ISREG(lock_stat.st_mode):
+                raise IntegrityError(
+                    "The event ledger lock path is not a regular file.",
+                    details={"path": str(lock_path)},
+                )
+            if lock_stat.st_size == 0:
+                os.write(descriptor, b"\0")
+                os.fsync(descriptor)
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(descriptor, msvcrt.LK_LOCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(descriptor, fcntl.LOCK_EX)
+            locked = True
+            yield
+        finally:
+            if locked:
+                os.lseek(descriptor, 0, os.SEEK_SET)
+                if os.name == "nt":
+                    import msvcrt
+
+                    msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+            os.close(descriptor)
 
 
 @dataclass(frozen=True, slots=True)
@@ -440,39 +500,35 @@ class EventLedger:
         _validate_json_value(payload_value)
         _validate_json_value(refs_value, location="artifact_refs")
 
-        report, records = self._scan()
-        report.raise_for_error()
-        if records and any(record["run_id"] != selected_run_id for record in records):
-            raise UsageError("All events in a ledger must belong to the same run_id.")
-        previous_hash = records[-1]["event_hash"] if records else None
-        entry: dict[str, Any] = {
-            "schema_version": SCHEMA_VERSION,
-            "event_id": f"EVT-{len(records):08d}",
-            "run_id": selected_run_id,
-            "sequence": len(records),
-            "occurred_at": selected_time,
-            "event_type": event_type,
-            "actor": actor_value,
-            "payload": payload_value,
-            "artifact_refs": refs_value,
-            "previous_event_hash": previous_hash,
-        }
-        entry["event_hash"] = hash_json(entry)
-        encoded = canonical_json(entry) + b"\n"
+        with _exclusive_ledger_lock(self.path):
+            report, records = self._scan()
+            report.raise_for_error()
+            if records and any(record["run_id"] != selected_run_id for record in records):
+                raise UsageError("All events in a ledger must belong to the same run_id.")
+            previous_hash = records[-1]["event_hash"] if records else None
+            entry: dict[str, Any] = {
+                "schema_version": SCHEMA_VERSION,
+                "event_id": f"EVT-{len(records):08d}",
+                "run_id": selected_run_id,
+                "sequence": len(records),
+                "occurred_at": selected_time,
+                "event_type": event_type,
+                "actor": actor_value,
+                "payload": payload_value,
+                "artifact_refs": refs_value,
+                "previous_event_hash": previous_hash,
+            }
+            entry["event_hash"] = hash_json(entry)
+            encoded = canonical_json(entry) + b"\n"
 
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        flags = os.O_APPEND | os.O_CREAT | os.O_WRONLY
-        if hasattr(os, "O_BINARY"):
-            flags |= os.O_BINARY
-        descriptor = os.open(self.path, flags, 0o600)
-        try:
+            flags = os.O_APPEND | os.O_CREAT | os.O_WRONLY
+            if hasattr(os, "O_BINARY"):
+                flags |= os.O_BINARY
+            descriptor = os.open(self.path, flags, 0o600)
             with os.fdopen(descriptor, "ab", buffering=0) as stream:
                 stream.write(encoded)
                 stream.flush()
                 os.fsync(stream.fileno())
-        except Exception:
-            # fdopen owns the descriptor once constructed.
-            raise
 
         return json.loads(canonical_json(entry).decode("utf-8"))
 

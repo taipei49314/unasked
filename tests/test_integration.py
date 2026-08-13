@@ -329,7 +329,7 @@ def test_authority_requires_a_succeeded_experiment(tmp_path: Path) -> None:
     assert report.detailed_checks["experiment_complete"] is False
 
 
-def test_external_evidence_can_authorize_a_structurally_complete_certificate(
+def test_external_evidence_is_recorded_but_cannot_self_authorize(
     tmp_path: Path,
     capsys,
 ) -> None:
@@ -346,9 +346,14 @@ def test_external_evidence_can_authorize_a_structurally_complete_certificate(
         )
         for index, execution in enumerate(experiment["executions"], start=1)
     ]
+    input_manifest = read_json(
+        project.candidate_dir(run_id, candidate_id) / "experiment" / "environment.json"
+    )["input_manifest"]
+    reproducer = Actor("reproducer-1", "independent_reproducer")
     isolation_receipt = service.store.put_bytes(
         canonical_json(
             {
+                "schema_version": "0.1.0",
                 "issuer": "test-external-isolator",
                 "claims": [
                     "NETWORK_ISOLATED",
@@ -356,15 +361,19 @@ def test_external_evidence_can_authorize_a_structurally_complete_certificate(
                     "SECRET_FREE",
                 ],
                 "status": "ATTESTED",
+                "subject": {
+                    "run_id": run_id,
+                    "source_run_id": run_id,
+                    "hypothesis_id": bundle["hypothesis"]["hypothesis_id"],
+                    "reproducer_actor_id": reproducer.actor_id,
+                    "input_manifest_hash": hash_json(input_manifest),
+                    "command_result_sha256s": [metadata.sha256 for metadata in replay_commands],
+                },
             }
         ),
         media_type="application/json",
         original_name="external-isolation-receipt.json",
     )
-    input_manifest = read_json(
-        project.candidate_dir(run_id, candidate_id) / "experiment" / "environment.json"
-    )["input_manifest"]
-    reproducer = Actor("reproducer-1", "independent_reproducer")
     replay_result = {
         "schema_version": "0.1.0",
         "replay_id": f"RP-{candidate_id[2:]}",
@@ -424,8 +433,33 @@ def test_external_evidence_can_authorize_a_structurally_complete_certificate(
             result_path=result_path,
             environment_path=environment_path,
         )
+    unrelated_receipt = service.store.put_bytes(
+        b"unrelated",
+        media_type="application/octet-stream",
+        original_name="unrelated-receipt.bin",
+    )
+    unrelated_environment = {
+        **environment,
+        "isolation_attestation": {
+            **environment["isolation_attestation"],
+            "receipt_ref": unrelated_receipt.to_reference(),
+        },
+    }
+    replay_result["environment_hash"] = hash_json(unrelated_environment)
+    result_path.write_text(json.dumps(replay_result), encoding="utf-8")
+    environment_path.write_text(json.dumps(unrelated_environment), encoding="utf-8")
+    with pytest.raises(PolicyError, match="not valid JSON evidence"):
+        service.import_external_replay(
+            run_id,
+            candidate_id,
+            actor=reproducer,
+            result_path=result_path,
+            environment_path=environment_path,
+        )
+
     replay_result["environment_hash"] = hash_json(environment)
     result_path.write_text(json.dumps(replay_result), encoding="utf-8")
+    environment_path.write_text(json.dumps(environment), encoding="utf-8")
     service.import_external_replay(
         run_id,
         candidate_id,
@@ -436,19 +470,14 @@ def test_external_evidence_can_authorize_a_structurally_complete_certificate(
 
     authority = Actor("judge-2", "human_judge")
     report = AuthorityKernel(project).evaluate(run_id, candidate_id, authority=authority)
-    assert report.eligible is True, report.to_dict()
-    authorized = AuthorityKernel(project).authorize(run_id, candidate_id, authority=authority)
-    assert authorized["verdict"]["status"] == "VERIFIED"
-    assert authorized["certificate"]["status"] == "VERIFIED"
-    assert project.current_state(run_id, candidate_id) is State.VERIFIED
-    audit = AuthorityKernel(project).audit_certificate(run_id, candidate_id)
-    assert audit["valid"] is True, audit
+    assert report.eligible is False, report.to_dict()
+    assert report.detailed_checks["external_isolation_attested"] is False
+    assert report.detailed_checks["clean_replay_passed"] is False
+    with pytest.raises(PolicyError, match="not authorized"):
+        AuthorityKernel(project).authorize(run_id, candidate_id, authority=authority)
+    assert project.current_state(run_id, candidate_id) is State.REPRODUCED
 
-    certificate_path = project.candidate_dir(run_id, candidate_id) / "certificate.yaml"
-    tampered_certificate = read_json(certificate_path)
-    tampered_certificate["decision_impact"] += " Altered after issuance."
-    certificate_path.write_text(json.dumps(tampered_certificate), encoding="utf-8")
     exit_code = main(["--json", "report", "--workspace", str(project.root), "--verified-only"])
     payload = json.loads(capsys.readouterr().out)
-    assert exit_code == 4
-    assert payload["error"]["code"] == "INTEGRITY_ERROR"
+    assert exit_code == 0
+    assert payload["data"] == {"certificates": [], "status": "NO_VERIFIED_DISCOVERY"}

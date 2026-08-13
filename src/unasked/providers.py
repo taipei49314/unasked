@@ -4,7 +4,9 @@ import copy
 import json
 import math
 import os
+import signal
 import subprocess  # nosec B404
+import sys
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,6 +28,168 @@ class ProviderTimeoutError(ExecutionError):
     """The provider exceeded a named timeout boundary."""
 
     code = "PROVIDER_TIMEOUT"
+
+
+class _WindowsJob:
+    """A kill-on-close Job Object that contains the provider launcher and descendants."""
+
+    def __init__(self) -> None:
+        import ctypes
+        from ctypes import wintypes
+
+        class _BasicLimitInformation(ctypes.Structure):
+            _fields_ = [
+                ("per_process_user_time_limit", ctypes.c_int64),
+                ("per_job_user_time_limit", ctypes.c_int64),
+                ("limit_flags", wintypes.DWORD),
+                ("minimum_working_set_size", ctypes.c_size_t),
+                ("maximum_working_set_size", ctypes.c_size_t),
+                ("active_process_limit", wintypes.DWORD),
+                ("affinity", ctypes.c_size_t),
+                ("priority_class", wintypes.DWORD),
+                ("scheduling_class", wintypes.DWORD),
+            ]
+
+        class _IoCounters(ctypes.Structure):
+            _fields_ = [
+                ("read_operation_count", ctypes.c_uint64),
+                ("write_operation_count", ctypes.c_uint64),
+                ("other_operation_count", ctypes.c_uint64),
+                ("read_transfer_count", ctypes.c_uint64),
+                ("write_transfer_count", ctypes.c_uint64),
+                ("other_transfer_count", ctypes.c_uint64),
+            ]
+
+        class _ExtendedLimitInformation(ctypes.Structure):
+            _fields_ = [
+                ("basic_limit_information", _BasicLimitInformation),
+                ("io_info", _IoCounters),
+                ("process_memory_limit", ctypes.c_size_t),
+                ("job_memory_limit", ctypes.c_size_t),
+                ("peak_process_memory_used", ctypes.c_size_t),
+                ("peak_job_memory_used", ctypes.c_size_t),
+            ]
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+        kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+        kernel32.SetInformationJobObject.argtypes = [
+            wintypes.HANDLE,
+            ctypes.c_int,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+        ]
+        kernel32.SetInformationJobObject.restype = wintypes.BOOL
+        kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+        kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+        kernel32.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+        kernel32.TerminateJobObject.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+
+        handle = kernel32.CreateJobObjectW(None, None)
+        if not handle:
+            raise OSError(ctypes.get_last_error(), "CreateJobObjectW failed")
+        information = _ExtendedLimitInformation()
+        information.basic_limit_information.limit_flags = 0x00002000
+        if not kernel32.SetInformationJobObject(
+            handle,
+            9,
+            ctypes.byref(information),
+            ctypes.sizeof(information),
+        ):
+            error = ctypes.get_last_error()
+            kernel32.CloseHandle(handle)
+            raise OSError(error, "SetInformationJobObject failed")
+        self._ctypes = ctypes
+        self._kernel32 = kernel32
+        self._handle = handle
+        self._lock = threading.Lock()
+
+    def assign(self, process: subprocess.Popen[bytes]) -> None:
+        process_handle = getattr(process, "_handle", None)
+        if process_handle is None or not self._kernel32.AssignProcessToJobObject(
+            self._handle,
+            self._ctypes.c_void_p(int(process_handle)),
+        ):
+            raise OSError(self._ctypes.get_last_error(), "AssignProcessToJobObject failed")
+
+    def terminate(self) -> None:
+        with self._lock:
+            if self._handle is None:
+                return
+            self._kernel32.TerminateJobObject(self._handle, 1)
+            self._kernel32.CloseHandle(self._handle)
+            self._handle = None
+
+
+class _ProviderProcessTree:
+    """Own a provider process boundary and terminate ordinary descendants on every exit."""
+
+    def __init__(
+        self,
+        process: subprocess.Popen[bytes],
+        *,
+        windows_job: _WindowsJob | None = None,
+    ) -> None:
+        self.process = process
+        self._windows_job = windows_job
+        self._lock = threading.Lock()
+        self._terminated = False
+
+    @classmethod
+    def spawn(
+        cls,
+        argv: list[str],
+        *,
+        environment: dict[str, str],
+    ) -> _ProviderProcessTree:
+        windows_job: _WindowsJob | None = None
+        command = argv
+        popen_options: dict[str, Any] = {}
+        if os.name == "nt":
+            # The trusted launcher blocks on stdin. The parent assigns it to the Job Object
+            # before writing the request, so provider code cannot run outside the job first.
+            windows_job = _WindowsJob()
+            command = [sys.executable, "-m", "unasked._provider_runner", *argv]
+        else:
+            popen_options["start_new_session"] = True
+        try:
+            process = subprocess.Popen(  # nosec B603
+                command,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                shell=False,
+                env=environment,
+                **popen_options,
+            )
+            if windows_job is not None:
+                windows_job.assign(process)
+        except (OSError, ValueError):
+            if "process" in locals():
+                process.kill()
+                process.wait()
+            if windows_job is not None:
+                windows_job.terminate()
+            raise
+        return cls(process, windows_job=windows_job)
+
+    def terminate(self) -> None:
+        with self._lock:
+            if self._terminated:
+                return
+            self._terminated = True
+            if self._windows_job is not None:
+                self._windows_job.terminate()
+            else:
+                try:
+                    os.killpg(self.process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                except OSError:
+                    if self.process.poll() is None:
+                        self.process.kill()
 
 
 class ExplorerProvider(Protocol):
@@ -270,16 +434,12 @@ class JsonSubprocessProvider:
         self._verify_integrity()
         payload = canonical_json(request) + b"\n"
         try:
-            # The executable identity is frozen and rechecked immediately before spawn.
-            process = subprocess.Popen(  # nosec B603
+            process_tree = _ProviderProcessTree.spawn(
                 self.argv,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                shell=False,
-                env=self._environment(),
+                environment=self._environment(),
             )
-        except OSError as exc:
+            process = process_tree.process
+        except (OSError, ValueError) as exc:
             raise ExecutionError(
                 "Explorer provider could not be started.",
                 details={"type": type(exc).__name__},
@@ -300,7 +460,7 @@ class JsonSubprocessProvider:
                         exceeded = len(chunk) > remaining
                     if exceeded:
                         overflow.set()
-                        process.kill()
+                        process_tree.terminate()
                         break
             except (OSError, ValueError):
                 return
@@ -324,7 +484,7 @@ class JsonSubprocessProvider:
         try:
             process.wait(timeout=effective_timeout)
         except subprocess.TimeoutExpired as exc:
-            process.kill()
+            process_tree.terminate()
             process.wait()
             writer.join(timeout=1)
             for thread in readers:
@@ -336,6 +496,9 @@ class JsonSubprocessProvider:
                     "timeout_source": timeout_source,
                 },
             ) from exc
+        # A provider is one bounded call. Descendants may not outlive either a successful
+        # parent exit or a failed call, so close the process boundary before returning.
+        process_tree.terminate()
         writer.join(timeout=1)
         for thread in readers:
             thread.join(timeout=1)
