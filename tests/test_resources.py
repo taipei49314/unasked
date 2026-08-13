@@ -19,6 +19,8 @@ def test_bundled_resources_match_source_files() -> None:
         "custody/BENCHMARK_CUSTODY_PROTOCOL.md",
         "examples/m0-budget.json",
         "examples/provider-scripted.json",
+        "examples/trial-evidence-index.json",
+        "examples/trial-preregistration.json",
         "protocols/m0-development-v0.1.json",
         "protocols/p0-v0.1.json",
         "templates/WORK_PACKAGE.md",

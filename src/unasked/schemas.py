@@ -40,6 +40,9 @@ _SCHEMA_FILES = {
     "review": "review.schema.json",
     "run": "run.schema.json",
     "trial-manifest": "trial-manifest.schema.json",
+    "trial-preregistration": "trial-preregistration.schema.json",
+    "trial-evidence-index": "trial-evidence-index.schema.json",
+    "trial-evidence-audit": "trial-evidence-audit.schema.json",
     "trial-report": "trial-report.schema.json",
     "verdict": "verdict.schema.json",
 }

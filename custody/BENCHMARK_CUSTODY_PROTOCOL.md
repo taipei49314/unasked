@@ -9,6 +9,13 @@ materiality class, minimum evidence, disallowed shortcuts, false-positive traps,
 counterevidence, clean replay procedure, knowledge boundary, sealing time, and manifest
 SHA-256. Five positive cases and two clean/decoy controls are required for formal M0.
 
+Before any trial run, the custodian assigns opaque suite and case identifiers. The public
+trial preregistration contains only those identifiers, the ablation variant, frozen target,
+protocol, budget and model bindings, and their hashes. It must not disclose the case kind,
+ground truth, expected result, minimum evidence, materiality, traps, or replay procedure.
+Those fields remain solely in the access-controlled manifest. The same opaque identifier is
+used across the five preregistered variants without giving the Explorer a semantic label.
+
 The Explorer receives only the target snapshot and frozen high-level prompt. The evaluator
 receives Explorer outputs only after run lock. Access logs and the sealed manifest hash are
 attached by the custodian, never synthesized by the Explorer.

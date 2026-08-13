@@ -36,7 +36,7 @@ def test_release_source_bindings_are_consistent() -> None:
     root = Path(__file__).resolve().parents[1]
 
     completed = subprocess.run(
-        [sys.executable, "scripts/verify_release.py", "--tag", "v0.2.2"],
+        [sys.executable, "scripts/verify_release.py", "--tag", "v0.3.0"],
         cwd=root,
         check=False,
         capture_output=True,
@@ -48,7 +48,7 @@ def test_release_source_bindings_are_consistent() -> None:
     assert completed.returncode == 0
     assert payload["ok"] is True
     assert report["name"] == "unasked-research"
-    assert report["version"] == "0.2.2"
+    assert report["version"] == "0.3.0"
     assert (
         report["charter_sha256"]
         == "3c5b6e607f460581c7a85ecddbb695a54681a8d34b5bc2418896c3ab9dd0b86a"
@@ -134,7 +134,7 @@ def _render_expected_metadata() -> bytes:
     values = _expected_metadata_values(
         _ROOT,
         name="unasked-research",
-        version="0.2.2",
+        version="0.3.0",
     )
     header = "".join(
         f"{field}: {value}\n" for field, field_values in values.items() for value in field_values
@@ -144,7 +144,7 @@ def _render_expected_metadata() -> bytes:
 
 def test_release_metadata_is_exactly_bound_to_pyproject_and_readme() -> None:
     metadata = _render_expected_metadata()
-    expected = _expected_metadata_values(_ROOT, name="unasked-research", version="0.2.2")
+    expected = _expected_metadata_values(_ROOT, name="unasked-research", version="0.3.0")
 
     assert expected["License-Expression"] == ["LicenseRef-Proprietary"]
     assert expected["License-File"] == ["LICENSE"]
@@ -152,7 +152,7 @@ def test_release_metadata_is_exactly_bound_to_pyproject_and_readme() -> None:
         metadata,
         root=_ROOT,
         name="unasked-research",
-        version="0.2.2",
+        version="0.3.0",
     )
 
     injected = metadata.replace(b"\n\n", b"\nRequires-Dist: attacker-package\n\n", 1)
@@ -161,7 +161,7 @@ def test_release_metadata_is_exactly_bound_to_pyproject_and_readme() -> None:
             injected,
             root=_ROOT,
             name="unasked-research",
-            version="0.2.2",
+            version="0.3.0",
         )
 
 

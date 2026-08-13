@@ -205,6 +205,27 @@ class BoundedExplorer:
                 "Provider identity does not match the model frozen at init.",
                 details={"run_model": run["model"], "provider": metadata},
             )
+        trial = self.project.validate_trial_binding(run_id, expected_budget=self.budget)
+        if trial is not None:
+            preregistration, _ = trial
+            expected_modes = {
+                "read-only-llm-reviewer": InvestigationMode.READ_ONLY_LLM,
+                "llm-tools-no-experiment-gate": InvestigationMode.LLM_TOOLS_NO_EXPERIMENT_GATE,
+                "experiment-loop-without-falsifier": (
+                    InvestigationMode.EXPERIMENT_LOOP_NO_FALSIFIER
+                ),
+                "full-evidence-gated-system": InvestigationMode.FULL_EVIDENCE_GATED,
+            }
+            variant = preregistration["variant"]
+            if variant == "deterministic-detectors-only":
+                raise PolicyError(
+                    "The deterministic trial variant must use baselines run, not investigate."
+                )
+            if expected_modes.get(variant) is not self.mode:
+                raise PolicyError(
+                    "Investigation mode does not match the preregistered trial variant.",
+                    details={"variant": variant, "mode": self.mode.value},
+                )
         if auto_execute and self.mode in {
             InvestigationMode.READ_ONLY_LLM,
             InvestigationMode.LLM_TOOLS_NO_EXPERIMENT_GATE,

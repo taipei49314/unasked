@@ -34,7 +34,7 @@ from unasked.schemas import (
     list_schemas,
     validate,
 )
-from unasked.trials import aggregate_trials, certify_m0
+from unasked.trials import aggregate_trials, audit_trial_evidence, certify_m0
 from unasked.util import canonical_json, ensure_within, read_json
 from unasked.workflow import InvestigationService
 
@@ -146,6 +146,16 @@ def _resources_export(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _init(args: argparse.Namespace) -> dict[str, Any]:
+    if bool(args.trial_preregistration) != bool(args.budget):
+        raise UsageError("--trial-preregistration and --budget must be supplied together.")
+    preregistration = None
+    budget = None
+    if args.trial_preregistration:
+        preregistration = _load_json(args.trial_preregistration)
+        budget_payload = _load_json(args.budget)
+        if not isinstance(preregistration, dict) or not isinstance(budget_payload, dict):
+            raise UsageError("Trial preregistration and budget inputs must be JSON objects.")
+        budget = BudgetPolicy.from_dict(budget_payload)
     project = Project.create(args.workspace)
     return project.create_run(
         args.repository,
@@ -154,6 +164,8 @@ def _init(args: argparse.Namespace) -> dict[str, Any]:
         protocol_path=Path(args.protocol).resolve() if args.protocol else None,
         model_provider=args.model_provider,
         model_name=args.model_name,
+        trial_preregistration=preregistration,
+        budget_policy=budget,
     )
 
 
@@ -203,6 +215,11 @@ def _investigate(args: argparse.Namespace) -> Any:
 
 def _baseline_run(args: argparse.Namespace) -> Any:
     project = _open_project(args)
+    trial = project.validate_trial_binding(args.run)
+    if trial is not None and trial[0]["variant"] != "deterministic-detectors-only":
+        raise PolicyError(
+            "baselines run is only valid for the deterministic preregistered trial variant."
+        )
     result = run_deterministic_baseline(project, args.run)
     metadata = ArtifactStore(project.artifacts_root).put_bytes(
         canonical_json(result),
@@ -237,6 +254,15 @@ def _trials_certify(args: argparse.Namespace) -> Any:
     if not isinstance(report, dict):
         raise UsageError("Trials certify requires one report object.")
     return certify_m0(report)
+
+
+def _trials_audit(args: argparse.Namespace) -> Any:
+    report = _load_json(args.report)
+    evidence_index = _load_json(args.evidence_index)
+    if not isinstance(report, dict) or not isinstance(evidence_index, dict):
+        raise UsageError("Trials audit requires report and evidence-index JSON objects.")
+    base_path = Path(args.evidence_index).expanduser().resolve().parent
+    return audit_trial_evidence(report, evidence_index, base_path=base_path)
 
 
 def _expectations_add(args: argparse.Namespace) -> Any:
@@ -535,6 +561,14 @@ def _command_parser() -> Parser:
     init.add_argument("--protocol", help="Optional frozen protocol JSON.")
     init.add_argument("--model-provider", default="none")
     init.add_argument("--model-name", default="not-configured")
+    init.add_argument(
+        "--trial-preregistration",
+        help="Optional immutable M0 trial preregistration JSON; requires --budget.",
+    )
+    init.add_argument(
+        "--budget",
+        help="Optional frozen finite budget JSON; requires --trial-preregistration.",
+    )
     init.set_defaults(handler=_init, command_name="init")
 
     runs = commands.add_parser("runs", help="Discover and inspect immutable investigation runs.")
@@ -593,7 +627,8 @@ def _command_parser() -> Parser:
     baseline_run.set_defaults(handler=_baseline_run, command_name="baselines run")
 
     trials = commands.add_parser(
-        "trials", help="Aggregate M0 metrics or run the fail-closed certification check."
+        "trials",
+        help="Aggregate metrics, structurally audit evidence, or deny M0 certification.",
     )
     trial_commands = trials.add_subparsers(dest="trial_command", required=True)
     trial_evaluate = trial_commands.add_parser(
@@ -602,6 +637,13 @@ def _command_parser() -> Parser:
     trial_evaluate.add_argument("--manifest", required=True)
     trial_evaluate.add_argument("--results", required=True)
     trial_evaluate.set_defaults(handler=_trials_evaluate, command_name="trials evaluate")
+    trial_audit = trial_commands.add_parser(
+        "audit",
+        help="Structurally audit trial evidence; output always remains non-certifying.",
+    )
+    trial_audit.add_argument("--report", required=True)
+    trial_audit.add_argument("--evidence-index", required=True)
+    trial_audit.set_defaults(handler=_trials_audit, command_name="trials audit")
     trial_certify = trial_commands.add_parser(
         "certify",
         help="Recompute, then deny until an external evidence verifier is implemented.",

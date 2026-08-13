@@ -117,6 +117,71 @@ def valid_examples() -> dict[str, dict]:
         }
         for variant in ABLATION_VARIANTS
     ]
+    trial_preregistration = {
+        "schema_version": "0.1.0",
+        "record_type": "M0_TRIAL_PREREGISTRATION",
+        "registration_id": "REG-000001",
+        "suite_id": "M0-SUITE-1",
+        "case_id": "P-1",
+        "variant": "full-evidence-gated-system",
+        "registered_at": NOW,
+        "manifest_hash": HASH,
+        "protocol_hash": HASH,
+        "budget_policy_hash": hash_json(budget_policy),
+        "target_commit": COMMIT,
+        "model": {"provider": "scripted", "name": "fixture-model"},
+    }
+    evidence_index = {
+        "schema_version": "0.1.0",
+        "index_type": "M0_TRIAL_EVIDENCE_INDEX",
+        "suite_id": "M0-SUITE-1",
+        "manifest_hash": HASH,
+        "protocol_hash": HASH,
+        "report_hash": HASH,
+        "entries": [],
+        "index_hash": HASH,
+    }
+    structural_checks = {
+        "report_recomputed": True,
+        "index_binding_valid": True,
+        "index_coverage_complete": True,
+        "preregistration_bound": True,
+        "run_identity_bound": True,
+        "protocol_and_budget_bound": True,
+        "ledger_heads_match": True,
+        "result_artifacts_bound": True,
+        "certificate_graphs_valid": True,
+        "finding_flags_match_evidence": True,
+    }
+    evidence_audit = {
+        "schema_version": "0.1.0",
+        "audit_type": "M0_TRIAL_EVIDENCE_AUDIT",
+        "suite_id": "M0-SUITE-1",
+        "manifest_hash": HASH,
+        "protocol_hash": HASH,
+        "report_hash": HASH,
+        "evidence_index_hash": HASH,
+        "recomputed_report_hash": HASH,
+        "audit_result": "PASS",
+        "structural_checks": structural_checks,
+        "authorization_checks": {
+            "actor_identities_authenticated": False,
+            "custody_authenticated": False,
+            "external_attestation_trust_root_verified": False,
+            "external_checkpoint_verified": False,
+        },
+        "certification_blockers": [
+            "ACTOR_IDENTITIES_NOT_AUTHENTICATED",
+            "CUSTODY_NOT_AUTHENTICATED",
+            "EXTERNAL_ATTESTATION_TRUST_ROOT_NOT_VERIFIED",
+            "EXTERNAL_CHECKPOINT_NOT_VERIFIED",
+        ],
+        "entries": [],
+        "status": "NON_CERTIFYING",
+        "m0_demonstrated": False,
+        "reason_codes": [],
+        "audit_hash": HASH,
+    }
     baseline_signal = {
         "schema_version": "0.1.0",
         "signal_id": "SIG-000001",
@@ -321,7 +386,10 @@ def valid_examples() -> dict[str, dict]:
         "budget-policy": budget_policy,
         "explorer-action": explorer_action,
         "investigation-result": investigation_result,
+        "trial-evidence-audit": evidence_audit,
+        "trial-evidence-index": evidence_index,
         "trial-manifest": trial_manifest,
+        "trial-preregistration": trial_preregistration,
         "trial-report": aggregate_trials(trial_manifest, trial_results),
         "run": {
             "schema_version": "0.1.0",
@@ -681,7 +749,10 @@ def test_public_schema_list_is_stable_and_complete() -> None:
         "replay-result",
         "review",
         "run",
+        "trial-evidence-audit",
+        "trial-evidence-index",
         "trial-manifest",
+        "trial-preregistration",
         "trial-report",
         "verdict",
     )
@@ -740,6 +811,42 @@ def test_illegal_states_are_rejected(schema_name: str, field: str, illegal: str)
     instance[field] = illegal
     issues = validate_schema(schema_name, instance)
     assert any(issue.path == f"/{field}" and issue.code in {"const", "enum"} for issue in issues)
+
+
+def test_trial_report_schema_never_accepts_an_m0_success_claim() -> None:
+    instance = deepcopy(valid_examples()["trial-report"])
+    instance["status"] = "M0_DEMONSTRATED"
+    instance["m0_demonstrated"] = True
+    instance["gates"] = {name: True for name in instance["gates"]}
+
+    issues = validate_schema("trial-report", instance)
+
+    assert any(issue.path == "/status" and issue.code == "const" for issue in issues)
+    assert any(issue.path == "/m0_demonstrated" and issue.code == "const" for issue in issues)
+    assert any(
+        issue.path == "/gates/external_evidence_verified" and issue.code == "const"
+        for issue in issues
+    )
+
+
+def test_trial_evidence_audit_schema_rejects_laundered_pass_or_missing_blockers() -> None:
+    false_pass = deepcopy(valid_examples()["trial-evidence-audit"])
+    false_pass["structural_checks"]["ledger_heads_match"] = False
+    issues = validate_schema("trial-evidence-audit", false_pass)
+    assert any(issue.path == "/audit_result" and issue.code == "const" for issue in issues)
+
+    false_failure = deepcopy(valid_examples()["trial-evidence-audit"])
+    false_failure["audit_result"] = "FAIL"
+    issues = validate_schema("trial-evidence-audit", false_failure)
+    assert any(issue.path == "/audit_result" and issue.code == "const" for issue in issues)
+
+    missing_blocker = deepcopy(valid_examples()["trial-evidence-audit"])
+    missing_blocker["certification_blockers"] = []
+    issues = validate_schema("trial-evidence-audit", missing_blocker)
+    assert any(
+        issue.path == "/certification_blockers" and issue.code in {"minItems", "const"}
+        for issue in issues
+    )
 
 
 def test_verified_verdict_cannot_bypass_required_gates() -> None:

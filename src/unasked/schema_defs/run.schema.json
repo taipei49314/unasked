@@ -77,6 +77,34 @@
     "context_manifest_hash": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" },
     "knowledge_boundary_hash": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" },
     "budget_policy_hash": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" },
+    "trial_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "registration_id",
+        "suite_id",
+        "case_id",
+        "variant",
+        "preregistration_hash",
+        "manifest_hash"
+      ],
+      "properties": {
+        "registration_id": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" },
+        "suite_id": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" },
+        "case_id": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" },
+        "variant": {
+          "enum": [
+            "deterministic-detectors-only",
+            "read-only-llm-reviewer",
+            "llm-tools-no-experiment-gate",
+            "experiment-loop-without-falsifier",
+            "full-evidence-gated-system"
+          ]
+        },
+        "preregistration_hash": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" },
+        "manifest_hash": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" }
+      }
+    },
     "human_interventions": {
       "type": "array",
       "items": {
@@ -91,5 +119,11 @@
         }
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": { "required": ["trial_binding"] },
+      "then": { "required": ["budget_policy_hash"] }
+    }
+  ]
 }

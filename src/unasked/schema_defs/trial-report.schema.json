@@ -50,29 +50,12 @@
       "uniqueItems": true
     },
     "gates": { "$ref": "#/$defs/gates" },
-    "status": { "enum": ["M0_DEMONSTRATED", "NON_CERTIFYING"] },
-    "m0_demonstrated": { "type": "boolean" },
+    "status": { "const": "NON_CERTIFYING" },
+    "m0_demonstrated": { "const": false },
     "report_hash": {
       "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256"
     }
   },
-  "allOf": [
-    {
-      "if": {
-        "properties": { "status": { "const": "M0_DEMONSTRATED" } },
-        "required": ["status"]
-      },
-      "then": {
-        "properties": {
-          "m0_demonstrated": { "const": true },
-          "gates": { "$ref": "#/$defs/passingGates" }
-        }
-      },
-      "else": {
-        "properties": { "m0_demonstrated": { "const": false } }
-      }
-    }
-  ],
   "$defs": {
     "variant": {
       "enum": [
@@ -261,31 +244,8 @@
         "clean_replay_complete": { "type": "boolean" },
         "context_provenance_complete": { "type": "boolean" },
         "no_false_verified_claims": { "type": "boolean" },
-        "external_evidence_verified": { "type": "boolean" }
+        "external_evidence_verified": { "const": false }
       }
-    },
-    "passingGates": {
-      "allOf": [
-        { "$ref": "#/$defs/gates" },
-        {
-          "properties": {
-            "benchmark_sealed": { "const": true },
-            "independent_custody": { "const": true },
-            "sealed_before_explorer": { "const": true },
-            "case_mix_exact": { "const": true },
-            "ablation_coverage_complete": { "const": true },
-            "manifest_binding_complete": { "const": true },
-            "protocol_frozen": { "const": true },
-            "full_system_case_coverage": { "const": true },
-            "positive_threshold_met": { "const": true },
-            "control_threshold_met": { "const": true },
-            "clean_replay_complete": { "const": true },
-            "context_provenance_complete": { "const": true },
-            "no_false_verified_claims": { "const": true },
-            "external_evidence_verified": { "const": true }
-          }
-        }
-      ]
     }
   }
 }

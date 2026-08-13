@@ -28,7 +28,7 @@ hash against `SHA256SUMS.txt`, then install it. The following PowerShell example
 published checksum and downloaded wheel differ:
 
 ```powershell
-$version = "0.2.2"
+$version = "0.3.0"
 $wheel = "unasked_research-$version-py3-none-any.whl"
 $release = "https://github.com/taipei49314/unasked/releases/download/v$version"
 Invoke-WebRequest "$release/$wheel" -OutFile $wheel
@@ -79,14 +79,20 @@ results rather than prose alone.
 
 ```powershell
 unasked --json doctor
-unasked --json init <repository> --commit <sha> --workspace <path> `
+# Create a separate workspace/run for every opaque case and preregistered variant.
+unasked --json init <repository> --commit <sha> --workspace <variant-workspace> `
   --protocol .unasked-kit/protocols/m0-development-v0.1.json `
-  --model-provider scripted --model-name development-model
-unasked --json observe --workspace <path> --run <run-id>
-unasked --json baselines run --workspace <path> --run <run-id>
-unasked --json investigate --workspace <path> --run <run-id> `
+  --model-provider scripted --model-name development-model `
+  --trial-preregistration .unasked-kit/examples/trial-preregistration.json `
+  --budget .unasked-kit/examples/m0-budget.json
+unasked --json observe --workspace <variant-workspace> --run <run-id>
+# For deterministic-detectors-only runs, execute only the baseline command:
+unasked --json baselines run --workspace <variant-workspace> --run <run-id>
+# For each of the other four variants, execute only investigate with its matching --mode:
+unasked --json investigate --workspace <variant-workspace> --run <run-id> `
   --budget .unasked-kit/examples/m0-budget.json `
-  --provider-config .unasked-kit/examples/provider-scripted.json
+  --provider-config .unasked-kit/examples/provider-scripted.json `
+  --mode <preregistered-mode>
 unasked --json expectations add ...
 unasked --json candidates propose ...
 unasked --json experiments plan ...
@@ -101,6 +107,8 @@ unasked --json attest custody ...
 unasked --json verify ... --check-only
 unasked --json report --workspace <path> --verified-only
 unasked --json trials evaluate --manifest <private-manifest.json> --results <results.json>
+unasked --json trials audit --report <aggregate-report.json> `
+  --evidence-index <trial-evidence-index.json>
 unasked --json trials certify --report <aggregate-report.json>
 ```
 
@@ -109,8 +117,10 @@ repository. All target writes occur only in temporary worktrees.
 
 Proposal, plan, challenge, and review JSON examples are in [`examples/`](examples/) and in
 the exported resource kit. Actor IDs are recorded but not authenticated in the v0.1 evidence
-protocol implemented by the v0.2 software series; organizational separation remains an external
-control.
+protocol; organizational separation remains an external control. Trial preregistration and
+evidence-index examples are templates: replace every placeholder commit and hash with values
+computed for the actual sealed run. Preregistration and budget must be supplied together at
+`init`; a legacy run cannot be retroactively converted into a trial run.
 
 ### Fail-closed replay
 
@@ -121,7 +131,7 @@ isolated reproducer must first import all CAS artifacts with `artifacts add`, th
 `replay import` with independently produced replay and environment manifests.
 The imported environment must bind the target, frozen plan, executable set, independent
 command-result records, and a CAS-backed isolation receipt whose structured subject must bind
-the replay inputs and outputs. Because v0.2.2 has no independently configured signature trust
+the replay inputs and outputs. Because v0.3.0 has no independently configured signature trust
 root, the authority kernel deliberately treats every imported receipt as unauthenticated:
 the evidence may be retained and reach `REPRODUCED`, but it cannot authorize `VERIFIED`.
 
@@ -148,10 +158,22 @@ arms using exact decimal metrics and TUDY accounting.
 The supplied development provider and examples deliberately skipped independent benchmark
 custody. Consequently every `investigate` result is labeled `UNSEALED_DEVELOPMENT`, with
 `certification.status = NON_CERTIFYING` and `m0_demonstrated = false`. Even perfect unsealed
-5-positive/2-control results cannot authorize an M0 claim. Version 0.2 also keeps a structurally
-"sealed" input non-certifying: `trials certify` always rejects until an external verifier can
-authenticate custody and dereference every finding into its certificate, CAS, ledger, run,
-replay, and protocol bundle. Input booleans are metrics, not authority. UNASKED never
+5-positive/2-control results cannot authorize an M0 claim.
+
+The three trial commands have deliberately different authority:
+
+- `trials evaluate` deterministically recomputes aggregate metrics from a manifest and the five
+  result arms. It trusts the result documents only as metric inputs.
+- `trials audit` dereferences a separately hashed evidence index into each preregistered run,
+  ledger head, CAS or run result, and the complete current `VERIFIED` certificate set. It returns
+  a readable `PASS` or `FAIL` structural matrix, but all authorization checks remain false and
+  the output is always `NON_CERTIFYING` with `m0_demonstrated=false`. Workspaces must be safe
+  relative paths resolved beneath the evidence-index directory.
+- `trials certify` still recomputes and then denies. Version 0.3 has no authenticated actor or
+  custody identities, external attestation trust root, or external ledger checkpoint, so a
+  structural audit can never unlock certification.
+
+Input booleans are metrics, not authority. UNASKED never
 synthesizes a custody attestation. A future formal M0 run still needs evidence sealed by an
 independent custodian before Explorer development, 3/5 positive cases, zero false `VERIFIED`
 controls, complete context provenance, and 100% clean replay.
