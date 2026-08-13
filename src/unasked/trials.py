@@ -2,22 +2,29 @@
 
 The aggregator is deliberately useful before a benchmark has valid custody: it
 can compare ablations and calculate metrics, but labels that output
-``NON_CERTIFYING``.  Version 0.2 can calculate the charter's aggregate thresholds,
+``NON_CERTIFYING``.  Version 0.3 can calculate the charter's aggregate thresholds,
 but it cannot authenticate a custodian or verify each external certificate/CAS/
 ledger bundle.  It therefore never emits an M0 success claim.
 """
 
 from __future__ import annotations
 
+import json
 import math
 import re
 from collections.abc import Mapping, Sequence
 from decimal import ROUND_HALF_EVEN, Decimal, InvalidOperation
 from enum import StrEnum
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
+from unasked.artifacts import ArtifactStore
+from unasked.authority import AuthorityKernel
 from unasked.errors import IntegrityError, PolicyError, UsageError
-from unasked.util import canonical_json, hash_json
+from unasked.project import Project
+from unasked.protocol import protocol_hash
+from unasked.schemas import validate_or_raise
+from unasked.util import canonical_json, hash_json, read_json, sha256_file
 
 SCHEMA_VERSION = "0.1.0"
 METRIC_QUANTUM = Decimal("0.000001")
@@ -48,22 +55,45 @@ _FINDING_FLAGS = (
     "decision_impact",
     "evidence_complete",
 )
-_CERTIFICATION_GATES = (
-    "benchmark_sealed",
-    "independent_custody",
-    "sealed_before_explorer",
-    "case_mix_exact",
-    "ablation_coverage_complete",
-    "manifest_binding_complete",
-    "protocol_frozen",
-    "full_system_case_coverage",
-    "positive_threshold_met",
-    "control_threshold_met",
-    "clean_replay_complete",
-    "context_provenance_complete",
-    "no_false_verified_claims",
-    "external_evidence_verified",
+_AUTHORIZATION_CHECKS = (
+    "actor_identities_authenticated",
+    "custody_authenticated",
+    "external_attestation_trust_root_verified",
+    "external_checkpoint_verified",
 )
+_CERTIFICATION_BLOCKERS = (
+    "ACTOR_IDENTITIES_NOT_AUTHENTICATED",
+    "CUSTODY_NOT_AUTHENTICATED",
+    "EXTERNAL_ATTESTATION_TRUST_ROOT_NOT_VERIFIED",
+    "EXTERNAL_CHECKPOINT_NOT_VERIFIED",
+)
+_ENTRY_CHECKS = (
+    "preregistration_bound",
+    "run_identity_bound",
+    "protocol_and_budget_bound",
+    "ledger_head_matches",
+    "result_artifact_bound",
+    "certificate_set_complete",
+    "certificate_graphs_valid",
+)
+_STRUCTURAL_CHECKS = (
+    "report_recomputed",
+    "index_binding_valid",
+    "index_coverage_complete",
+    "preregistration_bound",
+    "run_identity_bound",
+    "protocol_and_budget_bound",
+    "ledger_heads_match",
+    "result_artifacts_bound",
+    "certificate_graphs_valid",
+    "finding_flags_match_evidence",
+)
+_INVESTIGATION_MODES = {
+    "read-only-llm-reviewer": "read_only_llm",
+    "llm-tools-no-experiment-gate": "llm_tools_no_experiment_gate",
+    "experiment-loop-without-falsifier": "experiment_loop_no_falsifier",
+    "full-evidence-gated-system": "full_evidence_gated",
+}
 
 
 def _mapping(value: Any, name: str) -> Mapping[str, Any]:
@@ -431,8 +461,6 @@ def aggregate_trials(manifest: dict, variant_results: list[dict]) -> dict[str, A
         # never authority.
         "external_evidence_verified": False,
     }
-    demonstrated = all(gates[name] for name in _CERTIFICATION_GATES)
-
     report: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "report_type": "M0_TRIAL_AGGREGATE",
@@ -443,8 +471,8 @@ def aggregate_trials(manifest: dict, variant_results: list[dict]) -> dict[str, A
         "variant_results": normalized_results,
         "variant_reports": variant_reports,
         "gates": gates,
-        "status": "M0_DEMONSTRATED" if demonstrated else "NON_CERTIFYING",
-        "m0_demonstrated": demonstrated,
+        "status": "NON_CERTIFYING",
+        "m0_demonstrated": False,
     }
     report["report_hash"] = hash_json(report)
     return report
@@ -488,12 +516,524 @@ def certify_m0(report: dict) -> dict[str, Any]:
     return rebuilt
 
 
+def _verify_self_hash(document: dict[str, Any], field: str, name: str) -> str:
+    claimed = document[field]
+    candidate = {key: value for key, value in document.items() if key != field}
+    actual = hash_json(candidate)
+    if claimed != actual:
+        raise IntegrityError(
+            f"{name} self-hash mismatch.",
+            details={"field": field, "expected": actual, "actual": claimed},
+        )
+    return actual
+
+
+def _safe_workspace_paths(
+    entries: Sequence[Mapping[str, Any]], base_path: Path
+) -> dict[tuple[str, str], Path]:
+    base = base_path.expanduser().resolve()
+    resolved: dict[tuple[str, str], Path] = {}
+    for entry in entries:
+        rendered = entry["workspace"]
+        locator = Path(rendered)
+        posix_locator = PurePosixPath(rendered)
+        windows_locator = PureWindowsPath(rendered)
+        unsafe = any(
+            (
+                locator.is_absolute(),
+                bool(locator.drive),
+                posix_locator.is_absolute(),
+                bool(posix_locator.root),
+                ".." in posix_locator.parts,
+                windows_locator.is_absolute(),
+                bool(windows_locator.drive),
+                bool(windows_locator.root),
+                ".." in windows_locator.parts,
+            )
+        )
+        if unsafe:
+            raise UsageError(
+                "Trial evidence workspace must be a relative path without parent traversal.",
+                details={"workspace": rendered},
+            )
+        candidate = (base / locator).resolve(strict=False)
+        if candidate != base and base not in candidate.parents:
+            raise UsageError(
+                "Trial evidence workspace resolves outside the evidence index directory.",
+                details={"workspace": rendered},
+            )
+        resolved[(entry["variant"], entry["case_id"])] = candidate
+    return resolved
+
+
+def _false_finding(case_id: str) -> dict[str, Any]:
+    return {"case_id": case_id, **{flag: False for flag in _FINDING_FLAGS}}
+
+
+def _matching_artifact_event(
+    events: Sequence[Mapping[str, Any]],
+    *,
+    event_type: str,
+    digest: str,
+    path: str | None = None,
+    expected_payload: Mapping[str, Any] | None = None,
+) -> bool:
+    matches = []
+    for event in events:
+        if event.get("event_type") != event_type:
+            continue
+        event_payload = event.get("payload", {})
+        if path is not None and event_payload != {"path": path, "sha256": digest}:
+            continue
+        if expected_payload is not None and event_payload != expected_payload:
+            continue
+        if path is None and not any(
+            reference.get("sha256") == digest for reference in event.get("artifact_refs", [])
+        ):
+            continue
+        matches.append(event)
+    return len(matches) == 1
+
+
+def _derive_verified_finding(
+    case_id: str,
+    certificate_audits: Sequence[Mapping[str, Any]],
+    *,
+    actual_verified: bool,
+    certificate_set_complete: bool,
+) -> dict[str, Any]:
+    if not actual_verified:
+        return _false_finding(case_id)
+    audits_valid = (
+        certificate_set_complete
+        and bool(certificate_audits)
+        and all(audit.get("valid") is True for audit in certificate_audits)
+    )
+    gate_reports = [audit.get("gate_report", {}) for audit in certificate_audits]
+
+    def every_detail(name: str) -> bool:
+        return audits_valid and all(
+            report.get("detailed_checks", {}).get(name) is True for report in gate_reports
+        )
+
+    evidence_complete = audits_valid and all(
+        report.get("checks", {}).get("evidence_complete") is True
+        and all(
+            report.get("detailed_checks", {}).get(name) is True
+            for name in (
+                "experiment_environment_bound",
+                "replay_environment_bound",
+                "replay_input_bound",
+                "replay_outputs_bound",
+                "artifact_integrity",
+                "source_replay",
+                "ledger_integrity",
+                "legal_state_history",
+                "protocol_frozen",
+                "snapshot_bound",
+                "identity_bound",
+            )
+        )
+        for report in gate_reports
+    )
+    return {
+        "case_id": case_id,
+        "claimed_verified": True,
+        "verified": audits_valid,
+        "unasked": every_detail("unasked_attestation"),
+        "novel": every_detail("declared_knowledge_boundary")
+        and every_detail("novelty_review_approved"),
+        "replay_passed": every_detail("clean_replay_passed"),
+        "counterevidence_passed": every_detail("counterevidence_complete"),
+        "external_authority": False,
+        "decision_impact": every_detail("materiality_review_approved"),
+        "evidence_complete": evidence_complete,
+    }
+
+
+def _audit_trial_entry(
+    entry: Mapping[str, Any],
+    *,
+    workspace: Path,
+    report_finding: Mapping[str, Any],
+    suite_id: str,
+    manifest_hash: str,
+    protocol_digest: str,
+) -> tuple[dict[str, Any], bool]:
+    checks = {name: False for name in _ENTRY_CHECKS}
+    reasons: set[str] = set()
+    derived = _false_finding(entry["case_id"])
+    public_certificate_audits: list[dict[str, Any]] = []
+    internal_certificate_audits: list[dict[str, Any]] = []
+    try:
+        project = Project.open(workspace)
+        run_id = entry["run_id"]
+        paths = project.paths(run_id)
+        run = project.get_run(run_id)
+        validate_or_raise("run", run)
+        target = project.get_target(run_id)
+
+        trial = project.validate_trial_binding(run_id)
+        if trial is None:
+            reasons.add("TRIAL_BINDING_MISSING")
+        else:
+            preregistration, budget = trial
+            binding = run["trial_binding"]
+            checks["preregistration_bound"] = all(
+                (
+                    binding["suite_id"] == suite_id,
+                    binding["case_id"] == entry["case_id"],
+                    binding["variant"] == entry["variant"],
+                    binding["manifest_hash"] == manifest_hash,
+                    binding["preregistration_hash"] == entry["preregistration_hash"],
+                    preregistration["manifest_hash"] == manifest_hash,
+                )
+            )
+            checks["protocol_and_budget_bound"] = all(
+                (
+                    run["protocol"]["sha256"] == protocol_digest,
+                    preregistration["protocol_hash"] == protocol_digest,
+                    protocol_hash(read_json(paths.protocol)) == protocol_digest,
+                    run["budget_policy_hash"] == entry["budget_policy_hash"],
+                    budget.sha256 == entry["budget_policy_hash"],
+                    preregistration["budget_policy_hash"] == entry["budget_policy_hash"],
+                )
+            )
+
+        snapshot_identity = {
+            "commit": target["commit"],
+            "tree": target["tree"],
+            "submodules": target.get("submodules", []),
+            "dependency_locks": target.get("dependency_locks", []),
+        }
+        checks["run_identity_bound"] = all(
+            (
+                run["run_id"] == run_id,
+                sha256_file(paths.run) == entry["run_sha256"],
+                target.get("snapshot_identity") == snapshot_identity,
+                target.get("snapshot_hash") == hash_json(snapshot_identity),
+                run["target"]["repository_commit"] == target["commit"],
+                run["target"]["snapshot_hash"] == target["snapshot_hash"],
+                hash_json(read_json(paths.context)) == run["context_manifest_hash"],
+                hash_json(read_json(paths.knowledge_boundary)) == run["knowledge_boundary_hash"],
+            )
+        )
+
+        ledger_report = project.ledger(run_id).verify()
+        events = project.ledger(run_id).read_all() if ledger_report.valid else []
+        expected_created_payload = {
+            "target_snapshot_hash": target["snapshot_hash"],
+            "protocol_hash": run["protocol"]["sha256"],
+            "context_manifest_hash": run["context_manifest_hash"],
+            "knowledge_boundary_hash": run["knowledge_boundary_hash"],
+            "trial_preregistration_hash": run.get("trial_binding", {}).get("preregistration_hash"),
+            "budget_policy_hash": run.get("budget_policy_hash"),
+        }
+        created_events = [event for event in events if event.get("event_type") == "RUN_CREATED"]
+        checks["ledger_head_matches"] = all(
+            (
+                ledger_report.valid,
+                ledger_report.entries == entry["ledger"]["entries"],
+                ledger_report.last_hash == entry["ledger"]["last_hash"],
+                len(created_events) == 1,
+                len(created_events) == 1 and created_events[0].get("sequence") == 0,
+                len(created_events) == 1
+                and created_events[0].get("payload") == expected_created_payload,
+            )
+        )
+
+        result_reference = entry["result_ref"]
+        if entry["variant"] == AblationVariant.DETERMINISTIC_DETECTORS_ONLY.value:
+            store = ArtifactStore(project.artifacts_root)
+            digest = result_reference["sha256"]
+            result = json.loads(store.read_bytes(digest).decode("utf-8"))
+            validate_or_raise("baseline-result", result)
+            checks["result_artifact_bound"] = all(
+                (
+                    result_reference["kind"] == "BASELINE_RESULT",
+                    result_reference["storage"] == "CAS",
+                    result["run_id"] == run_id,
+                    result["snapshot_hash"] == target["snapshot_hash"],
+                    result["snapshot_commit"] == target["commit"],
+                    result["protocol_hash"] == protocol_digest,
+                    _matching_artifact_event(
+                        events,
+                        event_type="DETERMINISTIC_BASELINE_COMPLETED",
+                        digest=digest,
+                        expected_payload={
+                            "baseline_run_id": result["baseline_run_id"],
+                            "signal_count": result["signal_count"],
+                            "snapshot_hash": result["snapshot_hash"],
+                            "protocol_hash": result["protocol_hash"],
+                        },
+                    ),
+                )
+            )
+        else:
+            expected_mode = _INVESTIGATION_MODES.get(entry["variant"])
+            result_path = paths.root / "investigation" / "result.json"
+            start_path = paths.root / "investigation" / "start.json"
+            result = read_json(result_path)
+            start = read_json(start_path)
+            validate_or_raise("investigation-result", result)
+            result_digest = sha256_file(result_path)
+            start_digest = sha256_file(start_path)
+            expected_provider = {
+                "provider": result["provider"]["provider"],
+                "name": result["provider"]["model"],
+            }
+            checks["result_artifact_bound"] = all(
+                (
+                    result_reference["kind"] == "INVESTIGATION_RESULT",
+                    result_reference["storage"] == "RUN_FILE",
+                    result_reference.get("path") == "investigation/result.json",
+                    result_reference["sha256"] == result_digest,
+                    result["run_id"] == run_id,
+                    result["mode"] == expected_mode,
+                    result["provenance"]["target_snapshot_hash"] == target["snapshot_hash"],
+                    result["provenance"]["protocol_hash"] == protocol_digest,
+                    result["provenance"]["budget_policy_hash"] == entry["budget_policy_hash"],
+                    hash_json(result["budget"]["limits"]) == entry["budget_policy_hash"],
+                    expected_provider == run["model"],
+                    start.get("run_id") == run_id,
+                    start.get("mode") == expected_mode,
+                    start.get("target_snapshot_hash") == target["snapshot_hash"],
+                    start.get("protocol_hash") == protocol_digest,
+                    start.get("budget_policy_hash") == entry["budget_policy_hash"],
+                    start.get("budget_policy") == result["budget"]["limits"],
+                    start.get("provider") == result["provider"],
+                    _matching_artifact_event(
+                        events,
+                        event_type="INVESTIGATION_STARTED",
+                        digest=start_digest,
+                        path="investigation/start.json",
+                    ),
+                    _matching_artifact_event(
+                        events,
+                        event_type="INVESTIGATION_COMPLETED",
+                        digest=result_digest,
+                        path="investigation/result.json",
+                    ),
+                )
+            )
+
+        verified_candidates: set[str] = set()
+        for candidate_root in sorted(paths.discoveries.iterdir()):
+            candidate_path = candidate_root / "candidate.json"
+            if (
+                candidate_root.is_symlink()
+                or candidate_root.resolve().parent != paths.discoveries.resolve()
+                or not candidate_root.is_dir()
+                or not candidate_path.is_file()
+            ):
+                raise IntegrityError(
+                    "Trial discoveries contain an unrecognized candidate entry.",
+                    details={"path": candidate_root.name},
+                )
+            candidate = read_json(candidate_path)
+            validate_or_raise("candidate", candidate)
+            if candidate["candidate_id"] != candidate_root.name or candidate["run_id"] != run_id:
+                raise IntegrityError(
+                    "Trial candidate directory identity is invalid.",
+                    details={"path": candidate_root.name},
+                )
+            if project.current_state(run_id, candidate["candidate_id"]).value == "VERIFIED":
+                verified_candidates.add(candidate["candidate_id"])
+        certificate_refs = list(entry["certificate_refs"])
+        referenced_candidates = {reference["candidate_id"] for reference in certificate_refs}
+        checks["certificate_set_complete"] = referenced_candidates == verified_candidates and len(
+            referenced_candidates
+        ) == len(certificate_refs)
+        for reference in sorted(certificate_refs, key=lambda item: item["candidate_id"]):
+            candidate_id = reference["candidate_id"]
+            certificate_path = project.candidate_dir(run_id, candidate_id) / "certificate.yaml"
+            digest_matches = (
+                certificate_path.is_file()
+                and sha256_file(certificate_path) == reference["certificate_sha256"]
+            )
+            failed_checks: list[str] = []
+            audit: dict[str, Any] = {}
+            try:
+                audit = AuthorityKernel(project).audit_certificate(run_id, candidate_id)
+                failed_checks = list(audit.get("failed_checks", []))
+            except Exception as exc:  # evidence corruption must be reported, not abort the matrix
+                failed_checks = [f"CERTIFICATE_AUDIT_{type(exc).__name__.upper()}"]
+            valid = digest_matches and audit.get("valid") is True
+            if not digest_matches:
+                failed_checks.append("certificate_sha256")
+            public_certificate_audits.append(
+                {
+                    "candidate_id": candidate_id,
+                    "certificate_sha256": reference["certificate_sha256"],
+                    "valid": valid,
+                    "failed_checks": sorted(set(failed_checks)),
+                }
+            )
+            internal_certificate_audits.append({**audit, **public_certificate_audits[-1]})
+        checks["certificate_graphs_valid"] = checks["certificate_set_complete"] and all(
+            audit["valid"] for audit in public_certificate_audits
+        )
+        derived = _derive_verified_finding(
+            entry["case_id"],
+            internal_certificate_audits,
+            actual_verified=bool(verified_candidates),
+            certificate_set_complete=checks["certificate_set_complete"],
+        )
+    except Exception as exc:  # one damaged evidence bundle must not hide the rest of the matrix
+        reasons.add(f"ENTRY_EVIDENCE_{type(exc).__name__.upper()}")
+
+    for name, passed in checks.items():
+        if not passed:
+            reasons.add(f"{name.upper()}_FAILED")
+    finding_matches = canonical_json(derived) == canonical_json(report_finding)
+    if not finding_matches:
+        reasons.add("FINDING_FLAGS_MISMATCH")
+    entry_passed = all(checks.values()) and finding_matches
+    return (
+        {
+            "variant": entry["variant"],
+            "case_id": entry["case_id"],
+            "run_id": entry["run_id"],
+            "audit_result": "PASS" if entry_passed else "FAIL",
+            "checks": checks,
+            "derived_finding": derived,
+            "certificate_audits": public_certificate_audits,
+            "reason_codes": sorted(reasons),
+        },
+        finding_matches,
+    )
+
+
+def audit_trial_evidence(
+    report: dict[str, Any],
+    evidence_index: dict[str, Any],
+    *,
+    base_path: Path,
+) -> dict[str, Any]:
+    """Structurally audit every trial finding against its preregistered run evidence.
+
+    A structural PASS is deliberately non-certifying: v0.3 has no authenticated
+    identities, custody signer, external attestation trust root, or checkpoint verifier.
+    """
+
+    report_value = dict(_mapping(_json_safe(report), "report"))
+    index_value = dict(_mapping(_json_safe(evidence_index), "evidence_index"))
+    validate_or_raise("trial-report", report_value)
+    validate_or_raise("trial-evidence-index", index_value)
+    report_hash = _verify_self_hash(report_value, "report_hash", "Trial report")
+    index_hash = _verify_self_hash(index_value, "index_hash", "Trial evidence index")
+
+    rebuilt = aggregate_trials(
+        dict(_mapping(report_value["manifest"], "report.manifest")),
+        list(_sequence(report_value["variant_results"], "report.variant_results")),
+    )
+    if canonical_json(rebuilt) != canonical_json(report_value):
+        raise IntegrityError("Trial report does not match deterministic recomputation.")
+    recomputed_report_hash = rebuilt["report_hash"]
+
+    protocol_hashes = {result["protocol_hash"] for result in rebuilt["variant_results"]}
+    index_binding_valid = all(
+        (
+            index_value["suite_id"] == rebuilt["suite_id"],
+            index_value["manifest_hash"] == rebuilt["manifest_hash"],
+            index_value["report_hash"] == report_hash,
+            protocol_hashes == {index_value["protocol_hash"]},
+        )
+    )
+
+    findings_by_key = {
+        (result["variant"], finding["case_id"]): finding
+        for result in rebuilt["variant_results"]
+        for finding in result["findings"]
+    }
+    entries = list(index_value["entries"])
+    workspace_paths = _safe_workspace_paths(entries, base_path)
+    entry_keys = [(entry["variant"], entry["case_id"]) for entry in entries]
+    run_locations = [
+        (str(workspace_paths[key]), entry["run_id"])
+        for key, entry in zip(entry_keys, entries, strict=True)
+    ]
+    index_coverage_complete = all(
+        (
+            set(entry_keys) == set(findings_by_key),
+            len(entry_keys) == len(set(entry_keys)),
+            len(run_locations) == len(set(run_locations)),
+        )
+    )
+
+    entry_audits: list[dict[str, Any]] = []
+    finding_matches: list[bool] = []
+    for entry in sorted(entries, key=lambda item: (item["variant"], item["case_id"])):
+        key = (entry["variant"], entry["case_id"])
+        report_finding = findings_by_key.get(key, _false_finding(entry["case_id"]))
+        audit, matches = _audit_trial_entry(
+            entry,
+            workspace=workspace_paths[key],
+            report_finding=report_finding,
+            suite_id=rebuilt["suite_id"],
+            manifest_hash=rebuilt["manifest_hash"],
+            protocol_digest=index_value["protocol_hash"],
+        )
+        entry_audits.append(audit)
+        finding_matches.append(matches and key in findings_by_key)
+
+    def all_entries(check: str) -> bool:
+        return bool(entry_audits) and all(
+            entry["checks"].get(check) is True for entry in entry_audits
+        )
+
+    structural_checks = {
+        "report_recomputed": True,
+        "index_binding_valid": index_binding_valid,
+        "index_coverage_complete": index_coverage_complete,
+        "preregistration_bound": all_entries("preregistration_bound"),
+        "run_identity_bound": all_entries("run_identity_bound"),
+        "protocol_and_budget_bound": all_entries("protocol_and_budget_bound"),
+        "ledger_heads_match": all_entries("ledger_head_matches"),
+        "result_artifacts_bound": all_entries("result_artifact_bound"),
+        "certificate_graphs_valid": all_entries("certificate_graphs_valid"),
+        "finding_flags_match_evidence": (
+            index_coverage_complete and bool(finding_matches) and all(finding_matches)
+        ),
+    }
+    audit_result = "PASS" if all(structural_checks.values()) else "FAIL"
+    reasons = set(_CERTIFICATION_BLOCKERS)
+    reasons.update(
+        f"STRUCTURAL_{name.upper()}_FAILED"
+        for name, passed in structural_checks.items()
+        if not passed
+    )
+    reasons.update(reason for entry in entry_audits for reason in entry["reason_codes"])
+    audit: dict[str, Any] = {
+        "schema_version": SCHEMA_VERSION,
+        "audit_type": "M0_TRIAL_EVIDENCE_AUDIT",
+        "suite_id": rebuilt["suite_id"],
+        "manifest_hash": rebuilt["manifest_hash"],
+        "protocol_hash": index_value["protocol_hash"],
+        "report_hash": report_hash,
+        "evidence_index_hash": index_hash,
+        "recomputed_report_hash": recomputed_report_hash,
+        "audit_result": audit_result,
+        "structural_checks": structural_checks,
+        "authorization_checks": {name: False for name in _AUTHORIZATION_CHECKS},
+        "certification_blockers": sorted(_CERTIFICATION_BLOCKERS),
+        "entries": entry_audits,
+        "status": "NON_CERTIFYING",
+        "m0_demonstrated": False,
+        "reason_codes": sorted(reasons),
+    }
+    audit["audit_hash"] = hash_json(audit)
+    validate_or_raise("trial-evidence-audit", audit)
+    return audit
+
+
 __all__ = [
     "ABLATION_VARIANTS",
     "FULL_SYSTEM_VARIANT",
     "METRIC_QUANTUM",
     "AblationVariant",
     "aggregate_trials",
+    "audit_trial_evidence",
     "certify_m0",
     "manifest_digest",
 ]

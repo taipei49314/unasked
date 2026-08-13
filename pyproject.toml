@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "unasked-research"
-version = "0.2.2"
+version = "0.3.0"
 description = "A research harness for blind, evidence-gated repository investigation."
 readme = "README.md"
 license = "LicenseRef-Proprietary"

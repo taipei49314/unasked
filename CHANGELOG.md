@@ -3,6 +3,35 @@
 All notable software changes are recorded here. Milestone claims remain governed by
 `constitution/CLAIMS_POLICY.md` and require independent evidence beyond a software release.
 
+## 0.3.0 — 2026-08-13
+
+### Added
+
+- Immutable pre-execution trial preregistration bound to target commit, protocol, finite
+  budget, model identity, suite/case identifier, and ablation variant.
+- A self-hashed trial evidence index and deterministic structural audit that
+  dereferences run identity, ledger heads, baseline/investigation results, and the complete
+  current `VERIFIED` certificate set.
+- `trials audit --report --evidence-index` with readable PASS/FAIL matrices, fixed
+  authorization blockers, and stable JSON/exit-code behavior.
+
+### Security
+
+- Reject tampered trial bindings before the first provider call and reject mismatched
+  baseline/investigation variants before execution.
+- Constrain evidence workspaces beneath the index directory, distinguish canonical JSON
+  hashes from file-byte hashes, and re-run the existing certificate authority audit instead
+  of trusting index claims.
+- Harden the public report and audit schemas so they cannot validate an M0 success claim or
+  a structural PASS whose required checks are false.
+
+### Claim boundary
+
+Structural audit is evidence completeness checking, not authorization. Every audit keeps
+actor/custody authentication and external trust-root/checkpoint verification false; every
+output remains `NON_CERTIFYING` with `m0_demonstrated=false`, and `trials certify` still
+fails closed.
+
 ## 0.2.2 — 2026-08-13
 
 ### Security

@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.unasked.dev/v0.1/trial-preregistration.schema.json",
+  "title": "UNASKED M0 trial preregistration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_type",
+    "registration_id",
+    "suite_id",
+    "case_id",
+    "variant",
+    "registered_at",
+    "manifest_hash",
+    "protocol_hash",
+    "budget_policy_hash",
+    "target_commit",
+    "model"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "record_type": { "const": "M0_TRIAL_PREREGISTRATION" },
+    "registration_id": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" },
+    "suite_id": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" },
+    "case_id": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" },
+    "variant": {
+      "enum": [
+        "deterministic-detectors-only",
+        "read-only-llm-reviewer",
+        "llm-tools-no-experiment-gate",
+        "experiment-loop-without-falsifier",
+        "full-evidence-gated-system"
+      ]
+    },
+    "registered_at": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/timestamp" },
+    "manifest_hash": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" },
+    "protocol_hash": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" },
+    "budget_policy_hash": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" },
+    "target_commit": { "type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$" },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "name"],
+      "properties": {
+        "provider": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

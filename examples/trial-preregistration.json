@@ -1,0 +1,17 @@
+{
+  "schema_version": "0.1.0",
+  "record_type": "M0_TRIAL_PREREGISTRATION",
+  "registration_id": "REG-OPAQUE-0001",
+  "suite_id": "M0-SUITE-OPAQUE",
+  "case_id": "CASE-OPAQUE-0001",
+  "variant": "full-evidence-gated-system",
+  "registered_at": "2026-08-13T00:00:00Z",
+  "manifest_hash": "1111111111111111111111111111111111111111111111111111111111111111",
+  "protocol_hash": "7e67e1b27b9e42912579cb5f5f2c69602ae266bc4052ebec279afa08affb2169",
+  "budget_policy_hash": "4ec0c9196beb37fc4aa7e4978cd721bafc03bb1b82e18bfcdb168882f86dcf5e",
+  "target_commit": "2222222222222222222222222222222222222222",
+  "model": {
+    "provider": "scripted",
+    "name": "development-model"
+  }
+}

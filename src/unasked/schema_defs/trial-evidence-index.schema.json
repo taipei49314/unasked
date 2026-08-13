@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.unasked.dev/v0.1/trial-evidence-index.schema.json",
+  "title": "UNASKED M0 trial evidence index",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "index_type",
+    "suite_id",
+    "manifest_hash",
+    "protocol_hash",
+    "report_hash",
+    "entries",
+    "index_hash"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "index_type": { "const": "M0_TRIAL_EVIDENCE_INDEX" },
+    "suite_id": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" },
+    "manifest_hash": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" },
+    "protocol_hash": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" },
+    "report_hash": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" },
+    "entries": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/entry" },
+      "uniqueItems": true
+    },
+    "index_hash": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" }
+  },
+  "$defs": {
+    "variant": {
+      "enum": [
+        "deterministic-detectors-only",
+        "read-only-llm-reviewer",
+        "llm-tools-no-experiment-gate",
+        "experiment-loop-without-falsifier",
+        "full-evidence-gated-system"
+      ]
+    },
+    "certificateReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidate_id", "certificate_sha256"],
+      "properties": {
+        "candidate_id": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" },
+        "certificate_sha256": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" }
+      }
+    },
+    "ledger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entries", "last_hash"],
+      "properties": {
+        "entries": { "type": "integer", "minimum": 1 },
+        "last_hash": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" }
+      }
+    },
+    "resultReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "storage", "sha256"],
+      "properties": {
+        "kind": { "enum": ["BASELINE_RESULT", "INVESTIGATION_RESULT"] },
+        "storage": { "enum": ["CAS", "RUN_FILE"] },
+        "sha256": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" },
+        "path": { "type": "string", "minLength": 1 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "BASELINE_RESULT" } }, "required": ["kind"] },
+          "then": {
+            "properties": { "storage": { "const": "CAS" } },
+            "not": { "required": ["path"] }
+          }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "INVESTIGATION_RESULT" } }, "required": ["kind"] },
+          "then": {
+            "required": ["path"],
+            "properties": {
+              "storage": { "const": "RUN_FILE" },
+              "path": { "const": "investigation/result.json" }
+            }
+          }
+        }
+      ]
+    },
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "variant",
+        "case_id",
+        "workspace",
+        "run_id",
+        "run_sha256",
+        "preregistration_hash",
+        "budget_policy_hash",
+        "ledger",
+        "result_ref",
+        "certificate_refs"
+      ],
+      "properties": {
+        "variant": { "$ref": "#/$defs/variant" },
+        "case_id": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" },
+        "workspace": { "type": "string", "minLength": 1 },
+        "run_id": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" },
+        "run_sha256": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" },
+        "preregistration_hash": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" },
+        "budget_policy_hash": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" },
+        "ledger": { "$ref": "#/$defs/ledger" },
+        "result_ref": { "$ref": "#/$defs/resultReference" },
+        "certificate_refs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/certificateReference" },
+          "uniqueItems": true
+        }
+      }
+    }
+  }
+}

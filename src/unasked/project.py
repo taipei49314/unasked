@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from unasked import PROTOCOL_VERSION, __version__
+from unasked.budget import BudgetPolicy
 from unasked.errors import IntegrityError, NotFoundError, PolicyError, UsageError
 from unasked.index import DerivedIndex
 from unasked.ledger import EventLedger
@@ -78,6 +79,14 @@ class RunPaths:
         return self.root / "events.jsonl"
 
     @property
+    def trial_preregistration(self) -> Path:
+        return self.root / "trial-preregistration.json"
+
+    @property
+    def budget_policy(self) -> Path:
+        return self.root / "budget-policy.json"
+
+    @property
     def observations(self) -> Path:
         return self.root / "observations.jsonl"
 
@@ -147,6 +156,8 @@ class Project:
         protocol_path: Path | None = None,
         model_provider: str = "none",
         model_name: str = "not-configured",
+        trial_preregistration: dict[str, Any] | None = None,
+        budget_policy: BudgetPolicy | None = None,
     ) -> dict[str, Any]:
         require_capability(actor, Capability.OBSERVE)
         # The immutable Git object, not mutable worktree bytes, is the target. A dirty
@@ -196,13 +207,32 @@ class Project:
         }
         knowledge_hash = hash_json(knowledge_boundary)
         run_id = _new_run_id(snapshot["commit"], frozen_at)
-        run_root = self.runs_root / run_id
-        if run_root.exists():
-            raise IntegrityError("Generated run ID already exists.", details={"run_id": run_id})
-        run_root.mkdir(parents=True)
-        paths = RunPaths(run_root)
-
         protocol_digest = protocol_hash(protocol)
+        if (trial_preregistration is None) != (budget_policy is None):
+            raise UsageError("Trial preregistration and budget policy must be supplied together.")
+        normalized_preregistration: dict[str, Any] | None = None
+        preregistration_hash: str | None = None
+        if trial_preregistration is not None and budget_policy is not None:
+            normalized_preregistration = json.loads(
+                json.dumps(trial_preregistration, ensure_ascii=False)
+            )
+            validate_or_raise("trial-preregistration", normalized_preregistration)
+            expected_model = {"provider": model_provider, "name": model_name}
+            binding_failures = {
+                "target_commit": normalized_preregistration["target_commit"] == snapshot["commit"],
+                "protocol_hash": normalized_preregistration["protocol_hash"] == protocol_digest,
+                "budget_policy_hash": (
+                    normalized_preregistration["budget_policy_hash"] == budget_policy.sha256
+                ),
+                "model": normalized_preregistration["model"] == expected_model,
+            }
+            failed = sorted(name for name, passed in binding_failures.items() if not passed)
+            if failed:
+                raise PolicyError(
+                    "Trial preregistration does not match the immutable run inputs.",
+                    details={"failed_bindings": failed},
+                )
+            preregistration_hash = hash_json(normalized_preregistration)
         target = {
             **snapshot,
             "snapshot_hash": snapshot_hash,
@@ -235,6 +265,16 @@ class Project:
             "knowledge_boundary_hash": knowledge_hash,
             "human_interventions": [],
         }
+        if normalized_preregistration is not None and budget_policy is not None:
+            run["budget_policy_hash"] = budget_policy.sha256
+            run["trial_binding"] = {
+                "registration_id": normalized_preregistration["registration_id"],
+                "suite_id": normalized_preregistration["suite_id"],
+                "case_id": normalized_preregistration["case_id"],
+                "variant": normalized_preregistration["variant"],
+                "preregistration_hash": preregistration_hash,
+                "manifest_hash": normalized_preregistration["manifest_hash"],
+            }
         validate_or_raise("run", run)
         blindness = {
             "schema_version": SCHEMA_VERSION,
@@ -248,23 +288,39 @@ class Project:
             "external_custody_proof_present": False,
             "note": "Self-attestation is provenance, not independent proof of blindness.",
         }
+        run_root = self.runs_root / run_id
+        if run_root.exists():
+            raise IntegrityError("Generated run ID already exists.", details={"run_id": run_id})
+        run_root.mkdir(parents=True)
+        paths = RunPaths(run_root)
 
         _write_once(paths.target, target)
         _write_once(paths.protocol, protocol)
         _write_once(paths.context, context_manifest)
         _write_once(paths.blindness, blindness)
         _write_once(paths.knowledge_boundary, knowledge_boundary)
+        if normalized_preregistration is not None and budget_policy is not None:
+            _write_once(paths.trial_preregistration, normalized_preregistration)
+            _write_once(paths.budget_policy, budget_policy.to_dict())
         _write_once(paths.run, run)
         paths.discoveries.mkdir()
         ledger = EventLedger(paths.ledger, run_id=run_id)
+        run_created_payload = {
+            "target_snapshot_hash": snapshot_hash,
+            "protocol_hash": protocol_digest,
+            "context_manifest_hash": context_hash,
+            "knowledge_boundary_hash": knowledge_hash,
+        }
+        if normalized_preregistration is not None and budget_policy is not None:
+            run_created_payload.update(
+                {
+                    "trial_preregistration_hash": preregistration_hash,
+                    "budget_policy_hash": budget_policy.sha256,
+                }
+            )
         ledger.append(
             "RUN_CREATED",
-            {
-                "target_snapshot_hash": snapshot_hash,
-                "protocol_hash": protocol_digest,
-                "context_manifest_hash": context_hash,
-                "knowledge_boundary_hash": knowledge_hash,
-            },
+            run_created_payload,
             actor=_event_actor(actor),
         )
         self.index.upsert_run(
@@ -283,6 +339,69 @@ class Project:
 
     def get_target(self, run_id: str) -> dict[str, Any]:
         return read_json(self.paths(run_id).target)
+
+    def validate_trial_binding(
+        self,
+        run_id: str,
+        *,
+        expected_budget: BudgetPolicy | None = None,
+    ) -> tuple[dict[str, Any], BudgetPolicy] | None:
+        """Validate the immutable preregistration/budget pair for a trial run."""
+
+        run = self.get_run(run_id)
+        validate_or_raise("run", run)
+        binding = run.get("trial_binding")
+        if binding is None:
+            return None
+        paths = self.paths(run_id)
+        preregistration = read_json(paths.trial_preregistration)
+        budget_document = read_json(paths.budget_policy)
+        validate_or_raise("trial-preregistration", preregistration)
+        budget = BudgetPolicy.from_dict(budget_document)
+        target = self.get_target(run_id)
+        ledger_report = self.ledger(run_id).verify()
+        ledger_events = self.ledger(run_id).read_all() if ledger_report.valid else []
+        run_created_events = [
+            event for event in ledger_events if event.get("event_type") == "RUN_CREATED"
+        ]
+        expected_run_created_payload = {
+            "target_snapshot_hash": target["snapshot_hash"],
+            "protocol_hash": run["protocol"]["sha256"],
+            "context_manifest_hash": run["context_manifest_hash"],
+            "knowledge_boundary_hash": run["knowledge_boundary_hash"],
+            "trial_preregistration_hash": binding["preregistration_hash"],
+            "budget_policy_hash": run["budget_policy_hash"],
+        }
+        expected_binding = {
+            "registration_id": preregistration["registration_id"],
+            "suite_id": preregistration["suite_id"],
+            "case_id": preregistration["case_id"],
+            "variant": preregistration["variant"],
+            "preregistration_hash": hash_json(preregistration),
+            "manifest_hash": preregistration["manifest_hash"],
+        }
+        checks = {
+            "trial_binding": binding == expected_binding,
+            "budget_policy_hash": run.get("budget_policy_hash") == budget.sha256,
+            "preregistration_budget": preregistration["budget_policy_hash"] == budget.sha256,
+            "target_commit": preregistration["target_commit"] == target["commit"],
+            "run_commit": run["target"]["repository_commit"] == target["commit"],
+            "protocol_hash": preregistration["protocol_hash"] == run["protocol"]["sha256"],
+            "protocol_file": protocol_hash(read_json(paths.protocol)) == run["protocol"]["sha256"],
+            "model": preregistration["model"] == run["model"],
+            "expected_budget": expected_budget is None or expected_budget.sha256 == budget.sha256,
+            "ledger": ledger_report.valid,
+            "run_created_event": len(run_created_events) == 1
+            and run_created_events[0].get("sequence") == 0
+            and run_created_events[0].get("payload") == expected_run_created_payload,
+        }
+        failed = sorted(name for name, passed in checks.items() if not passed)
+        if failed:
+            raise IntegrityError(
+                "Trial preregistration or budget binding is invalid.",
+                details={"run_id": run_id, "failed_bindings": failed},
+            )
+        return preregistration, budget
 
     def list_runs(self) -> list[dict[str, Any]]:
         runs: list[dict[str, Any]] = []

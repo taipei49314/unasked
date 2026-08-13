@@ -1,0 +1,248 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.unasked.dev/v0.1/trial-evidence-audit.schema.json",
+  "title": "UNASKED M0 trial evidence structural audit",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "audit_type",
+    "suite_id",
+    "manifest_hash",
+    "protocol_hash",
+    "report_hash",
+    "evidence_index_hash",
+    "recomputed_report_hash",
+    "audit_result",
+    "structural_checks",
+    "authorization_checks",
+    "certification_blockers",
+    "entries",
+    "status",
+    "m0_demonstrated",
+    "reason_codes",
+    "audit_hash"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "audit_type": { "const": "M0_TRIAL_EVIDENCE_AUDIT" },
+    "suite_id": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" },
+    "manifest_hash": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" },
+    "protocol_hash": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" },
+    "report_hash": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" },
+    "evidence_index_hash": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" },
+    "recomputed_report_hash": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" },
+    "audit_result": { "enum": ["PASS", "FAIL"] },
+    "structural_checks": { "$ref": "#/$defs/structuralChecks" },
+    "authorization_checks": { "$ref": "#/$defs/authorizationChecks" },
+    "certification_blockers": {
+      "type": "array",
+      "prefixItems": [
+        { "const": "ACTOR_IDENTITIES_NOT_AUTHENTICATED" },
+        { "const": "CUSTODY_NOT_AUTHENTICATED" },
+        { "const": "EXTERNAL_ATTESTATION_TRUST_ROOT_NOT_VERIFIED" },
+        { "const": "EXTERNAL_CHECKPOINT_NOT_VERIFIED" }
+      ],
+      "items": false,
+      "minItems": 4,
+      "maxItems": 4
+    },
+    "entries": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/entryAudit" },
+      "uniqueItems": true
+    },
+    "status": { "const": "NON_CERTIFYING" },
+    "m0_demonstrated": { "const": false },
+    "reason_codes": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "audit_hash": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "structural_checks": {
+            "properties": {
+              "report_recomputed": { "const": true },
+              "index_binding_valid": { "const": true },
+              "index_coverage_complete": { "const": true },
+              "preregistration_bound": { "const": true },
+              "run_identity_bound": { "const": true },
+              "protocol_and_budget_bound": { "const": true },
+              "ledger_heads_match": { "const": true },
+              "result_artifacts_bound": { "const": true },
+              "certificate_graphs_valid": { "const": true },
+              "finding_flags_match_evidence": { "const": true }
+            }
+          }
+        }
+      },
+      "then": { "properties": { "audit_result": { "const": "PASS" } } },
+      "else": { "properties": { "audit_result": { "const": "FAIL" } } }
+    }
+  ],
+  "$defs": {
+    "variant": {
+      "enum": [
+        "deterministic-detectors-only",
+        "read-only-llm-reviewer",
+        "llm-tools-no-experiment-gate",
+        "experiment-loop-without-falsifier",
+        "full-evidence-gated-system"
+      ]
+    },
+    "certificationBlocker": {
+      "enum": [
+        "ACTOR_IDENTITIES_NOT_AUTHENTICATED",
+        "CUSTODY_NOT_AUTHENTICATED",
+        "EXTERNAL_ATTESTATION_TRUST_ROOT_NOT_VERIFIED",
+        "EXTERNAL_CHECKPOINT_NOT_VERIFIED"
+      ]
+    },
+    "structuralChecks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "report_recomputed",
+        "index_binding_valid",
+        "index_coverage_complete",
+        "preregistration_bound",
+        "run_identity_bound",
+        "protocol_and_budget_bound",
+        "ledger_heads_match",
+        "result_artifacts_bound",
+        "certificate_graphs_valid",
+        "finding_flags_match_evidence"
+      ],
+      "properties": {
+        "report_recomputed": { "type": "boolean" },
+        "index_binding_valid": { "type": "boolean" },
+        "index_coverage_complete": { "type": "boolean" },
+        "preregistration_bound": { "type": "boolean" },
+        "run_identity_bound": { "type": "boolean" },
+        "protocol_and_budget_bound": { "type": "boolean" },
+        "ledger_heads_match": { "type": "boolean" },
+        "result_artifacts_bound": { "type": "boolean" },
+        "certificate_graphs_valid": { "type": "boolean" },
+        "finding_flags_match_evidence": { "type": "boolean" }
+      }
+    },
+    "authorizationChecks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "actor_identities_authenticated",
+        "custody_authenticated",
+        "external_attestation_trust_root_verified",
+        "external_checkpoint_verified"
+      ],
+      "properties": {
+        "actor_identities_authenticated": { "const": false },
+        "custody_authenticated": { "const": false },
+        "external_attestation_trust_root_verified": { "const": false },
+        "external_checkpoint_verified": { "const": false }
+      }
+    },
+    "entryChecks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "preregistration_bound",
+        "run_identity_bound",
+        "protocol_and_budget_bound",
+        "ledger_head_matches",
+        "result_artifact_bound",
+        "certificate_set_complete",
+        "certificate_graphs_valid"
+      ],
+      "properties": {
+        "preregistration_bound": { "type": "boolean" },
+        "run_identity_bound": { "type": "boolean" },
+        "protocol_and_budget_bound": { "type": "boolean" },
+        "ledger_head_matches": { "type": "boolean" },
+        "result_artifact_bound": { "type": "boolean" },
+        "certificate_set_complete": { "type": "boolean" },
+        "certificate_graphs_valid": { "type": "boolean" }
+      }
+    },
+    "derivedFinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "case_id",
+        "claimed_verified",
+        "verified",
+        "unasked",
+        "novel",
+        "replay_passed",
+        "counterevidence_passed",
+        "external_authority",
+        "decision_impact",
+        "evidence_complete"
+      ],
+      "properties": {
+        "case_id": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" },
+        "claimed_verified": { "type": "boolean" },
+        "verified": { "type": "boolean" },
+        "unasked": { "type": "boolean" },
+        "novel": { "type": "boolean" },
+        "replay_passed": { "type": "boolean" },
+        "counterevidence_passed": { "type": "boolean" },
+        "external_authority": { "type": "boolean" },
+        "decision_impact": { "type": "boolean" },
+        "evidence_complete": { "type": "boolean" }
+      }
+    },
+    "certificateAudit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidate_id", "certificate_sha256", "valid", "failed_checks"],
+      "properties": {
+        "candidate_id": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" },
+        "certificate_sha256": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/sha256" },
+        "valid": { "type": "boolean" },
+        "failed_checks": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        }
+      }
+    },
+    "entryAudit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "variant",
+        "case_id",
+        "run_id",
+        "audit_result",
+        "checks",
+        "derived_finding",
+        "certificate_audits",
+        "reason_codes"
+      ],
+      "properties": {
+        "variant": { "$ref": "#/$defs/variant" },
+        "case_id": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" },
+        "run_id": { "$ref": "https://schemas.unasked.dev/v0.1/common.schema.json#/$defs/identifier" },
+        "audit_result": { "enum": ["PASS", "FAIL"] },
+        "checks": { "$ref": "#/$defs/entryChecks" },
+        "derived_finding": { "$ref": "#/$defs/derivedFinding" },
+        "certificate_audits": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/certificateAudit" },
+          "uniqueItems": true
+        },
+        "reason_codes": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        }
+      }
+    }
+  }
+}

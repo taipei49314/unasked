@@ -125,6 +125,46 @@ def _cas_references(value: Any) -> list[dict[str, Any]]:
     return found
 
 
+def _run_evidence_files(project: Project, run_id: str) -> dict[str, Path]:
+    paths = project.paths(run_id)
+    files = {
+        "run": paths.run,
+        "target": paths.target,
+        "protocol": paths.protocol,
+        "context_manifest": paths.context,
+        "blindness_attestation": paths.blindness,
+        "knowledge_boundary": paths.knowledge_boundary,
+        "knowledge_scan": paths.root / "knowledge-scan.json",
+        "custody_attestation": paths.root / "custody-attestation.json",
+    }
+    if project.get_run(run_id).get("trial_binding") is not None:
+        files.update(
+            {
+                "trial_preregistration": paths.trial_preregistration,
+                "budget_policy": paths.budget_policy,
+            }
+        )
+    return files
+
+
+def _expected_run_created_payload(run: dict[str, Any], target: dict[str, Any]) -> dict[str, Any]:
+    payload = {
+        "target_snapshot_hash": target["snapshot_hash"],
+        "protocol_hash": run["protocol"]["sha256"],
+        "context_manifest_hash": run["context_manifest_hash"],
+        "knowledge_boundary_hash": run["knowledge_boundary_hash"],
+    }
+    binding = run.get("trial_binding")
+    if binding is not None:
+        payload.update(
+            {
+                "trial_preregistration_hash": binding["preregistration_hash"],
+                "budget_policy_hash": run["budget_policy_hash"],
+            }
+        )
+    return payload
+
+
 class AuthorityKernel:
     """Deterministic evidence-authorization checks; it does not infer world truth."""
 
@@ -679,16 +719,7 @@ class AuthorityKernel:
             "known_issue_review": root / "known-issue.json",
             "materiality_review": root / "materiality.json",
         }
-        run_files = {
-            "run": self.project.paths(run_id).run,
-            "target": self.project.paths(run_id).target,
-            "protocol": self.project.paths(run_id).protocol,
-            "context_manifest": self.project.paths(run_id).context,
-            "blindness_attestation": self.project.paths(run_id).blindness,
-            "knowledge_boundary": self.project.paths(run_id).knowledge_boundary,
-            "knowledge_scan": self.project.paths(run_id).root / "knowledge-scan.json",
-            "custody_attestation": self.project.paths(run_id).root / "custody-attestation.json",
-        }
+        run_files = _run_evidence_files(self.project, run_id)
         file_metadata = {name: self._store_json_file(path) for name, path in files.items()}
         run_file_metadata = {name: self._store_json_file(path) for name, path in run_files.items()}
         expectations = {
@@ -973,16 +1004,7 @@ class AuthorityKernel:
                 and manifest_files[name].get("sha256") == sha256_file(path)
                 for name, path in current_files.items()
             )
-        current_run_files = {
-            "run": self.project.paths(run_id).run,
-            "target": self.project.paths(run_id).target,
-            "protocol": self.project.paths(run_id).protocol,
-            "context_manifest": self.project.paths(run_id).context,
-            "blindness_attestation": self.project.paths(run_id).blindness,
-            "knowledge_boundary": self.project.paths(run_id).knowledge_boundary,
-            "knowledge_scan": self.project.paths(run_id).root / "knowledge-scan.json",
-            "custody_attestation": self.project.paths(run_id).root / "custody-attestation.json",
-        }
+        current_run_files = _run_evidence_files(self.project, run_id)
         current_run_file_bindings = isinstance(manifest_run_files, dict) and set(
             manifest_run_files
         ) == set(current_run_files)
@@ -1048,12 +1070,7 @@ class AuthorityKernel:
                     run_created_events[0].get("sequence") == 0,
                     run_created_events[0].get("actor") == blindness.get("attested_by"),
                     run_created_events[0].get("payload")
-                    == {
-                        "target_snapshot_hash": target["snapshot_hash"],
-                        "protocol_hash": run["protocol"]["sha256"],
-                        "context_manifest_hash": run["context_manifest_hash"],
-                        "knowledge_boundary_hash": run["knowledge_boundary_hash"],
-                    },
+                    == _expected_run_created_payload(run, target),
                 )
             )
 
@@ -1236,6 +1253,16 @@ class AuthorityKernel:
         )
 
         experiment = read_json(current_files["experiment_result"])
+        trial_policy_bound = True
+        if run.get("trial_binding") is not None:
+            preregistration, budget = self.project.validate_trial_binding(run_id) or ({}, None)
+            trial_policy_bound = all(
+                (
+                    preregistration.get("protocol_hash") == run["protocol"]["sha256"],
+                    preregistration.get("target_commit") == target["commit"],
+                    budget is not None and budget.sha256 == run.get("budget_policy_hash"),
+                )
+            )
         checks = {
             "schemas_valid": True,
             "gate_re_evaluation_passed": gate_report.eligible,
@@ -1283,6 +1310,7 @@ class AuthorityKernel:
                     certificate["snapshot_binding"].get("context_manifest_hash")
                     == run["context_manifest_hash"],
                     certificate["snapshot_binding"]["tool_versions"] == run["tools"],
+                    trial_policy_bound,
                 )
             ),
             "manifest_current_files_bound": current_file_bindings,

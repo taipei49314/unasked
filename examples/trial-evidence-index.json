@@ -1,0 +1,10 @@
+{
+  "schema_version": "0.1.0",
+  "index_type": "M0_TRIAL_EVIDENCE_INDEX",
+  "suite_id": "M0-SUITE-OPAQUE",
+  "manifest_hash": "1111111111111111111111111111111111111111111111111111111111111111",
+  "protocol_hash": "7e67e1b27b9e42912579cb5f5f2c69602ae266bc4052ebec279afa08affb2169",
+  "report_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+  "entries": [],
+  "index_hash": "d964db66ff3d17b3b4a0ca646566cdb9fa85a999e20d518fefcd8e3061ba1835"
+}
