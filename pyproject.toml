@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling==1.31.0"]
+requires = ["hatchling==1.32.0"]
 build-backend = "hatchling.build"
 
 [project]
@@ -34,7 +34,7 @@ Issues = "https://github.com/taipei49314/unasked/issues"
 
 [project.optional-dependencies]
 dev = [
-  "hatchling==1.31.0",
+  "hatchling==1.32.0",
   "pytest>=9.0.3,<10",
   "pytest-cov>=6,<7",
   "ruff>=0.9,<1",
