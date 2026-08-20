@@ -193,7 +193,7 @@ def _expected_metadata_values(root: Path, *, name: str, version: str) -> dict[st
     if license_files != ["LICENSE"]:
         raise ReleaseCheckError("The release verifier requires LICENSE as the sole license file.")
     return {
-        "Metadata-Version": ["2.4"],
+        "Metadata-Version": ["2.5"],
         "Name": [name],
         "Version": [version],
         "Summary": [description],

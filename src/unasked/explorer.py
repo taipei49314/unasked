@@ -659,6 +659,10 @@ class BoundedExplorer:
             )
             provider_error: dict[str, Any] | None = None
             remaining_before_call = meter.remaining_wall_seconds
+            if remaining_before_call <= 0:
+                status = "BUDGET_EXHAUSTED"
+                stop_reason = "MAX_WALL_SECONDS"
+                break
             try:
                 response = self.provider.invoke(
                     request,

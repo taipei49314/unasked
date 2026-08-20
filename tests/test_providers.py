@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import sys
@@ -31,8 +32,10 @@ def test_json_subprocess_provider_strips_secrets_and_returns_one_action(
 
     assert response.exit_code == 0
     assert parse_action(response.stdout) == {"action": "STOP", "reason": "CLEAN"}
-    assert provider.metadata["network_isolation_enforced"] is False
-    assert "-c" not in str(provider.metadata)
+    metadata = provider.metadata
+    assert metadata["network_isolation_enforced"] is False
+    assert "argv" not in metadata
+    assert script not in json.dumps(metadata, sort_keys=True)
 
 
 def test_json_subprocess_provider_kills_output_overflow() -> None:
