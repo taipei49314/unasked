@@ -356,6 +356,27 @@ def test_provider_timeout_is_bounded_and_persisted_as_normal_budget_stop(
     assert (project.paths(run_id).root / "investigation" / "result.json").is_file()
 
 
+def test_budget_expiring_before_provider_call_does_not_become_provider_failure(
+    tmp_path: Path,
+) -> None:
+    project, run_id, _, _ = _project(tmp_path)
+    provider = ScriptedProvider([{"action": "STOP"}], model_name="fixture-model")
+    ticks = iter((0.0, 0.0, 2.0))
+
+    def clock() -> float:
+        return next(ticks, 2.0)
+
+    result = BoundedExplorer(project, provider, _budget(max_wall_seconds=1), clock=clock).run(
+        run_id,
+        actor=Actor("explorer-1", "explorer"),
+    )
+
+    assert result["status"] == "BUDGET_EXHAUSTED"
+    assert result["stop_reason"] == "MAX_WALL_SECONDS"
+    assert result["provider_failed"] is False
+    assert result["budget"]["consumed"]["provider_calls"] == 0
+
+
 def test_experiment_command_count_is_frozen_budget_dimension(tmp_path: Path) -> None:
     project, run_id, claim, source = _project(tmp_path)
     provider = ScriptedProvider(
