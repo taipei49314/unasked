@@ -79,7 +79,8 @@ jobs:
           uv run pytest
       - name: Build twice from the frozen tag
         run: |
-          export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+          SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+          export SOURCE_DATE_EPOCH
           uv build --no-build-isolation --out-dir dist/one
           uv build --no-build-isolation --out-dir dist/two
       - name: Verify and checksum distributions
